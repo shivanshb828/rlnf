@@ -25,7 +25,11 @@ class PraiseRewardWrapper(NeuralRewardWrapper):
     def neural(self, info, observed, pos_before, action):
         g = self.env.unwrapped
         state = g.state_index(pos_before)
-        good = bool(info["progress"] or info["reached_goal"])
+        if self.praise.praise_kind == "potential":   # Ng, Harada & Russell 1999: F = Phi(s') - Phi(s), Phi = -cost_to_go
+            c0, c1 = g.cost_to_go[pos_before], g.cost_to_go[g.pos]
+            good = float(np.clip(c0 - c1, -1, 1)) if np.isfinite(c0) and np.isfinite(c1) else 0.0
+        else:
+            good = bool(info["progress"] or info["reached_goal"])
         err_amp, praise_amp, records, surprise = self.brain.observe_step(info["errors"], good, observed, state, action)
         p_error = float(self.decoder.predict_proba(err_amp))
         p_good = float(self.praise_decoder.predict_proba(praise_amp))
@@ -35,7 +39,7 @@ class PraiseRewardWrapper(NeuralRewardWrapper):
         info["p_error"], info["p_good"], info["surprise"] = p_error, p_good, surprise
         self._actions.append(action)
         extras = dict(mean_surprise=surprise, frac_unpredictable=float(surprise > 0.5), praise_return=sign * self.praise.praise_ratio * (p_good - self.praise_baseline),
-                      good_events=float(good))
+                      good_events=float(good > 0))
         return neural, records, extras
 
     def step(self, action):

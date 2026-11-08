@@ -206,3 +206,54 @@ cheap distraction habit, and the masked fix backfires.
   REALab, tomato watering, Lang 2024, Leike 2017, Vivanti 2019, Lan 2020, van Hasselt
   2010, Iturrate 2010, Kim 2017, Chavarriaga & Millán 2010.
 - `README.md`: pointer section for the three-part round.
+
+## Review round (narrowing claims): runtime estimate before launch
+
+One chained background job on 8 workers, phases in order. Phase A `layouts` 1,440 tabular
+runs (~5 min). Phase B `fixes2` 1,600 runs (~6 min). Phase C `qinit` 480 runs (~5 min,
+attention and praise runs are slower), `double300k` 380 runs at 300k steps (~10 min),
+`realnoise20` 480 runs (~3 min). Phase D `praise_fixes` 160, `shaping` 160,
+`distractor_robust` 240 (~5 min together), `deep_fixes` 90 DQN / Double DQN / PPO runs
+(~8 min). About 45 minutes in total; each phase is analysed and committed as its results
+land, so a crash mid-chain loses at most the running experiment (resume with
+`sweep.py --experiment <name>`).
+
+## Phase A: two failure types (plain language)
+
+Layout family (`FOV_VARIANTS` in `rlnf/config.py`): off-route blind spot (original: the
+hazardous top route is unobserved), on-route (flipped: the safe bottom route is
+unobserved), half-route (bottom-left quadrant unobserved: the first half of the safe
+route). For each: honest, visibility, and an α = 0 baseline; plain and Double Q; q_init
+-1 and 0; σ 0.03 and 0.3; 20 seeds. Table: `results/summary_layouts_classified.csv`;
+figure `figures/review_two_failure_types.png`.
+
+Review numbers reproduced: off-route, σ 0.3, plain Q, q_init -1: 19/20 frozen; q_init 0:
+8/20. Double Q off-route σ 0.3: 0/20; Double Q σ 0.03: 16/20 (the anomaly). Flipped
+layout: plain 20/20 failed, Double Q 18/20, honest 0/20 failed.
+
+**Do the two types separate?** By layout, yes; by the stated criterion, only partly.
+- *Off-route blind spot* (q_init -1, σ 0.3): honest 20/20 reach the goal, α = 0 0/20,
+  visibility plain 1/20 with 18/19 failures ending in the hidden region: a TRAP, the
+  guidance on the route is there and the agent leaves it. Double Q: 20/20.
+- *On-route blind spot* (q_init -1): plain 0/20 at both σ, Double Q 2-4/20, all failures
+  end on the unobserved route (20/20 "ends hidden"): LOST GUIDANCE, the agent is where
+  it should be but gets no signal there; and Double Q does not rescue it (2/20, 4/20).
+- *Half-route* (q_init -1): plain 0/20, Double Q 0/20 (σ 0.03) and 8/20 (σ 0.3), failures
+  end in the hidden quadrant: mixed, and Double Q helps only partly.
+- The criterion's α = 0 clause cuts across this. With q_init -1 the α = 0 baseline fails
+  everywhere (0/20, pure random walk), so it never certifies "solvable without
+  guidance"; with q_init 0 it succeeds everywhere for plain Q (20/20, step cost as
+  exploration bonus) and 3/20 for Double Q. Under q_init 0 the visibility brain still
+  fails on the on-route layout (plain 0/20, ending hidden 20/20) and half-route (plain
+  7/20 reach), so by the criterion those are "traps" (the task is solvable without
+  guidance and the feedback makes it unsolvable) even though the route is unobserved.
+  Plainly: a blind spot that covers the route produces lost guidance for a learner that
+  needs guidance and an active trap for one that does not; the two types are
+  properties of the (layout, learner) pair, not of the layout alone.
+- Where the agent ends up is the cleaner discriminator: off-route failures end in the
+  hidden off-route region (17-18/19); on-route failures end on the hidden route
+  (19-20/20); half-route failures end in the hidden quadrant (12-20/20).
+
+**q_init matters everywhere** (Phase C quantifies it): with q_init 0 the off-route freeze
+drops to 8/20 (plain) and 0/20 (Double Q), but the on-route failure stays at 20/20 for
+plain Q and rises to 11/20 for Double Q at σ 0.3.

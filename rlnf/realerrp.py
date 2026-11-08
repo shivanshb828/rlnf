@@ -1,4 +1,9 @@
-"""Real ErrP noise: drive the simulated brain with decoder outputs from real EEG.
+"""Real decoder output distributions (i.i.d. per step): drive the simulated brain with held-out decoder outputs from real EEG.
+
+What this is: per simulated step, one *real* held-out decoder probability is sampled
+independently from the subject's error-trial or correct-trial pool. What this is not:
+real noise *dynamics* (trial-to-trial drift, habituation, fatigue); every step is an
+i.i.d. draw.
 
 Dataset: BNCI Horizon 2020 "013-2015: Monitoring error-related potentials"
 (Chavarriaga & Millán 2010, IEEE TNSRE 18:381-388), 6 subjects x 2 sessions,

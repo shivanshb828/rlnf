@@ -53,6 +53,20 @@ FOV = """\
 111111111111111
 """
 
+# Blind-spot layout family (same maze, different observer field of view):
+#   off_route   rows 0-6 hidden: the hazardous top route is unobserved, the safe route is watched (original)
+#   on_route    rows 8-14 hidden: the safe bottom route is unobserved, the hazardous route is watched (flipped)
+#   half_route  bottom-left quadrant hidden: the first half of the safe route is unobserved
+def _fov(hidden) -> str:
+    return "\n".join("".join("0" if hidden(r, c) else "1" for c in range(15)) for r in range(15)) + "\n"
+
+
+FOV_VARIANTS = {
+    "off_route": FOV,
+    "on_route": _fov(lambda r, c: r >= 8),
+    "half_route": _fov(lambda r, c: r >= 8 and c <= 7),
+}
+
 
 @dataclass(frozen=True)
 class EnvConfig:
@@ -106,8 +120,11 @@ class TrainConfig:
     #   masked       unobserved steps get no neural reward; observed ones are rescaled by 1 / observed fraction
     #   imputed      unobserved steps get -P_hat(error | cell, action), a running mean fit on observed steps only
     #   pessimistic  unobserved steps get the mean observed P(error) for that action
+    #   tax          unobserved steps get the mean observed penalty, no state or action dependence (ablation)
+    #   denoise      unobserved steps get no neural reward and observed steps are NOT rescaled (ablation)
     observability: str = "baseline"
-    real_errp: bool = False       # drive the brain with sampled real held-out decoder outputs (rlnf/realerrp.py), subject = seed mod 6
+    real_errp: bool = False       # drive the brain with sampled real held-out decoder outputs (rlnf/realerrp.py)
+    real_errp_subject: int = 0    # which subject (1-6); 0 = seed mod 6 + 1
     checkpoint_every: int = 5_000 # steps between policy checkpoints (greedy eval + KL)
     checkpoint_episodes: int = 5  # greedy episodes per checkpoint, on a copy of the env/brain
     ref_fraction: float = 0.1     # checkpoint at this fraction of training is the KL reference

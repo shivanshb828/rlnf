@@ -58,7 +58,7 @@ class NeuralRewardWrapper(gym.Wrapper):
             n_hazard=0, n_wall=0, n_away=0, errors_perceived=0, hab_factor_sum=0.0,
             # per-region agent-reward sums (region = FOV status of the cell after the step)
             n_visible=0, r_sum_visible=0.0, r_sq_visible=0.0, n_hidden=0, r_sum_hidden=0.0, r_sq_hidden=0.0,
-            observed_steps=0,
+            observed_steps=0, imputed_from_table=0, unobserved_steps=0,
         )
         self._error_keys: dict = {}   # (cell before the step, action) -> count of error steps this episode
 
@@ -91,17 +91,23 @@ class NeuralRewardWrapper(gym.Wrapper):
             return -(p_error - self.baseline)
         if mode == "masked":
             return -(p_error - self.baseline) * self._n_steps / self._n_observed if observed else 0.0
+        if mode == "denoise":
+            return -(p_error - self.baseline) if observed else 0.0
+        self.stats["unobserved_steps"] += 1
         fallback = self._p_global[0] / self._p_global[1] if self._p_global[1] else self.baseline
         if mode == "imputed":
             key = (pos_before, action)
             if key in self._p_by_key:
                 p_hat = self._p_by_key[key][0] / self._p_by_key[key][1]
+                self.stats["imputed_from_table"] += 1
             elif self._p_by_action[action, 1]:
                 p_hat = self._p_by_action[action, 0] / self._p_by_action[action, 1]
             else:
                 p_hat = fallback
         elif mode == "pessimistic":
             p_hat = self._p_by_action[action, 0] / self._p_by_action[action, 1] if self._p_by_action[action, 1] else fallback
+        elif mode == "tax":
+            p_hat = fallback
         else:
             raise ValueError(mode)
         return -(p_hat - self.baseline)
@@ -153,6 +159,8 @@ class NeuralRewardWrapper(gym.Wrapper):
             out["repeat_frac"] = sum(c - 1 for c in counts) / out["steps"]
             out["hidden_share"] = out["n_hidden"] / out["steps"]
             out["observed_frac"] = out.pop("observed_steps") / out["steps"]
+            n_unobs = out.pop("unobserved_steps")
+            out["imputed_from_table_frac"] = out.pop("imputed_from_table") / n_unobs if n_unobs else np.nan
             info["episode_stats"] = out
         return obs, reward, terminated, truncated, info
 
@@ -181,7 +189,7 @@ def build_env(env_cfg: EnvConfig, brain_cfg: BrainConfig, train_cfg: TrainConfig
                                    train_cfg.observability)
     if train_cfg.real_errp:
         from rlnf.realerrp import RealErrPBrain
-        brain = RealErrPBrain(brain_cfg, seed=seed)
+        brain = RealErrPBrain(brain_cfg, seed=seed, subject=train_cfg.real_errp_subject or None)
         decoder = brain.decoder()
     else:
         brain = Brain(brain_cfg, seed=seed)

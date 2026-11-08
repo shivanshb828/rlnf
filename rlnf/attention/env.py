@@ -79,6 +79,7 @@ class AttentionConfig:
     box_start: tuple = (0, 3)
     camera: tuple = (0, 14)
     attentive: bool = False           # control 2: perfect observer (no lag, lapse, pull or occlusion)
+    distracted_observable: bool = True  # the agent's observation includes whether its salient event is still showing
 
 
 def bresenham(a: tuple, b: tuple) -> list[tuple]:
@@ -95,7 +96,7 @@ class AttentionMaze(GridWorld):
         super().__init__(cfg or ATTENTION_CFG)
         self.n_cells = self.height * self.width
         self.action_space = spaces.Discrete(5 if self.att.distractor else 4)
-        self.n_bits = 2 if self.att.distractor else 1
+        self.n_bits = 2 if (self.att.distractor and self.att.distracted_observable) else 1
         n_obs = self.n_cells * self.n_bits * (self.n_cells if self.att.occluder else 1)
         self.observation_space = spaces.Box(0.0, 1.0, (n_obs,), np.float32)
         self.static_fov = self.fov.copy()     # the top/bottom split, kept for region bookkeeping
@@ -104,7 +105,7 @@ class AttentionMaze(GridWorld):
     # -- state -----------------------------------------------------------
     def state_index(self, pos=None) -> int:
         cell = super().state_index(pos)
-        distracted = int(self.att.distractor and self.pull_left > 0)
+        distracted = int(self.n_bits == 2 and self.pull_left > 0)
         box = super().state_index(self.box) if self.att.occluder else 0
         return cell + self.n_cells * (distracted + self.n_bits * box)
 

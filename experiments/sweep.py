@@ -26,6 +26,16 @@ Experiments (seed counts in SEEDS)
   att_distractor attention maze: gaze observer with the wave action, k {2, 5, 10}; controls: inert wave, attentive honest
   att_occluder   attention maze with a pushable box; control: transparent box; attentive honest
   att_fixes      strongest distractor (k 10) and occluder with the masked / imputed observability-aware rewards
+  --- review round ---
+  layouts        Phase A: FOV family {off_route, on_route, half_route} x {honest, visibility, alpha0} x {plain, double} x q_init {-1, 0} x sigma
+  fixes2         Phase B: {baseline, imputed, pessimistic, tax, denoise} x {3 layouts + absent_supervisor} x {honest, visibility} x {plain, double}
+  qinit          Phase C: q_init {-1, -0.5, 0} for the main result, praise farming, distract-then-err
+  double300k     Phase C: Double Q (and plain) at 300k steps everywhere Double Q is cited; the sigma 0.03 anomaly at 300k and lr 0.2
+  realnoise20    Phase C: real decoder outputs, 20 seeds per subject
+  praise_fixes   Phase D: {baseline, imputed, tax, denoise} on praise farming
+  deep_fixes     Phase D: {baseline, imputed, tax} on DQN / Double DQN / our PPO (10 seeds)
+  shaping        Phase D: potential-based vs progress-only praise, full visibility vs blind spot (Ng, Harada & Russell 1999)
+  distractor_robust Phase D: wave cost {0.01, 0.05, 0.2} x distracted bit observable {yes, no}
 
 Outputs (prefix = experiment name)
   <prefix>_runs.csv         one row per run: greedy-eval means + late-training aggregates + the run's tags
@@ -46,7 +56,7 @@ from pathlib import Path
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from rlnf.config import CONDITIONS, BrainConfig, TrainConfig  # noqa: E402
+from rlnf.config import CONDITIONS, FOV_VARIANTS, BrainConfig, EnvConfig, TrainConfig  # noqa: E402
 from rlnf.attention.env import AttentionConfig  # noqa: E402
 from rlnf.praise.brain import PraiseConfig  # noqa: E402
 from rlnf.train import run  # noqa: E402
@@ -65,7 +75,11 @@ SEEDS = {("main", "q"): 20, ("main", "ppo"): 10, ("ablation", "q"): 20, ("ablati
          ("variance", "q"): 10, ("fixes", "q"): 20, ("explore2", "q"): 20, ("absent", "q"): 20,
          ("ppo_diag", "ppo_torch"): 10, ("dqn", "dqn"): 10, ("dqn", "ddqn"): 10, ("observ", "q"): 20, ("realnoise", "q"): 20,
          ("praise_a", "q"): 20, ("praise_a", "ppo_torch"): 10, ("praise_b", "q"): 20, ("praise_c", "q"): 20, ("praise_flip", "q"): 10,
-         ("att_distractor", "q"): 20, ("att_occluder", "q"): 20, ("att_fixes", "q"): 20}
+         ("att_distractor", "q"): 20, ("att_occluder", "q"): 20, ("att_fixes", "q"): 20,
+         ("layouts", "q"): 20, ("fixes2", "q"): 20, ("qinit", "q"): 20, ("double300k", "q"): 20, ("realnoise20", "q"): 20,
+         ("praise_fixes", "q"): 20, ("deep_fixes", "dqn"): 10, ("deep_fixes", "ddqn"): 10, ("deep_fixes", "ppo_torch"): 10,
+         ("shaping", "q"): 20, ("distractor_robust", "q"): 20}
+LAYOUTS = list(FOV_VARIANTS)
 ATTENTION = {
     "gaze_k2": ("visibility", dict(distractor_pull=2)), "gaze_k5": ("visibility", dict(distractor_pull=5)),
     "gaze_k10": ("visibility", dict(distractor_pull=10)),
@@ -89,13 +103,20 @@ TRAIN_METRICS = ["true_return", "neural_return", "agent_return", "reached_goal",
                  "n_visible", "r_sum_visible", "r_sq_visible", "n_hidden", "r_sum_hidden", "r_sq_hidden",
                  "q_visible", "q_hidden", "mean_surprise", "frac_unpredictable", "action_entropy", "praise_return",
                  "good_events", "extra_steps", "observed_frac", "waves", "hazards_after_wave", "hazards_unobserved", "pushes",
-                 "frac_hazards_after_wave", "frac_hazards_unobserved"]
+                 "frac_hazards_after_wave", "frac_hazards_unobserved", "imputed_from_table_frac"]
 
 
-def job(learner, condition, alpha, seed, train=None, brain=None, env_name="maze", praise=None, attention=None, **tags) -> dict:
-    """A job = run() arguments + config overrides + tag columns copied into the output rows."""
-    return dict(learner=learner, condition=condition, alpha=alpha, seed=seed, env_name=env_name,
-                train=train or {}, brain=brain or {}, praise=praise, attention=attention, tags=dict(env_name=env_name, **tags))
+def job(learner, condition, alpha, seed, train=None, brain=None, env_name="maze", praise=None, attention=None, layout=None, **tags) -> dict:
+    """A job = run() arguments + config overrides + tag columns copied into the output rows.
+
+    ``layout`` names a FOV variant (FOV_VARIANTS) for the maze; ``condition="alpha0"`` means the honest brain at alpha = 0.
+    """
+    if condition == "alpha0":
+        condition, alpha = "honest", 0.0
+        tags["baseline"] = "alpha0"
+    return dict(learner=learner, condition=condition, alpha=alpha, seed=seed, env_name=env_name, layout=layout,
+                train=train or {}, brain=brain or {}, praise=praise, attention=attention,
+                tags=dict(env_name=env_name, layout=layout or ("off_route" if env_name == "maze" else env_name), **tags))
 
 
 def jobs_for(experiment: str, learner: str) -> list[dict]:
@@ -174,6 +195,61 @@ def jobs_for(experiment: str, learner: str) -> list[dict]:
         return [job(learner, "visibility", 1.0, s, env_name="attention", train={**VARIANTS[v], "observability": m},
                     attention=ATTENTION[n][1], variant=v, setting=n, noise_sigma=0.3, observability=m)
                 for n, m, v, s in itertools.product(["gaze_k10", "occluder"], ["masked", "imputed"], ["plain", "double"], seeds)]
+    if experiment == "layouts":
+        return [job(learner, c, 1.0, s, layout=lay, train={**VARIANTS[v], "q_init": qi}, brain=dict(noise_sigma=sg),
+                    variant=v, q_init=qi, noise_sigma=sg)
+                for lay, c, v, qi, sg, s in itertools.product(LAYOUTS, ["honest", "visibility", "alpha0"], ["plain", "double"], [-1.0, 0.0], [0.03, 0.3], seeds)]
+    if experiment == "fixes2":
+        modes = ["baseline", "imputed", "pessimistic", "tax", "denoise"]
+        envs = [("maze", lay) for lay in LAYOUTS] + [("absent_supervisor", None)]
+        return [job(learner, c, 1.0, s, env_name=env, layout=lay, brain=dict(noise_sigma=0.3), observability=m, variant=v, noise_sigma=0.3,
+                    train={**(ABSENT_TRAIN if env == "absent_supervisor" else {}), **VARIANTS[v], "observability": m})
+                for (env, lay), c, m, v, s in itertools.product(envs, ["honest", "visibility"], modes, ["plain", "double"], seeds)]
+    if experiment == "qinit":
+        out = []
+        for qi, v, s in itertools.product([-1.0, -0.5, 0.0], ["plain", "double"], seeds):
+            out.append(job(learner, "visibility", 1.0, s, train={**VARIANTS[v], "q_init": qi}, brain=dict(noise_sigma=0.3),
+                           test="main", variant=v, q_init=qi, noise_sigma=0.3))
+            for sg in (0.03, 0.3):
+                out.append(job(learner, "visibility", 1.0, s, train={**VARIANTS[v], "q_init": qi}, brain=dict(noise_sigma=sg),
+                               praise=dict(praise_ratio=0.5, surprise_weight=0.0), test="praise_farm", variant=v, q_init=qi, noise_sigma=sg))
+            out.append(job(learner, "visibility", 1.0, s, env_name="attention", train={**VARIANTS[v], "q_init": qi}, brain=dict(noise_sigma=0.3),
+                           attention=dict(distractor_pull=10), test="distract", variant=v, q_init=qi, noise_sigma=0.3))
+        return out
+    if experiment == "double300k":
+        long = dict(total_steps=300_000, checkpoint_every=15_000)
+        out = []
+        for v, s in itertools.product(["plain", "double"], seeds):
+            for sg in (0.03, 0.1, 0.3, 0.5):   # main result + the sigma 0.03 anomaly
+                out.append(job(learner, "visibility", 1.0, s, train={**VARIANTS[v], **long}, brain=dict(noise_sigma=sg), test="main", variant=v, noise_sigma=sg))
+            out.append(job(learner, "visibility", 1.0, s, layout="on_route", train={**VARIANTS[v], **long}, brain=dict(noise_sigma=0.3), test="on_route", variant=v, noise_sigma=0.3))
+            out.append(job(learner, "visibility", 1.0, s, env_name="absent_supervisor", train={**ABSENT_TRAIN, **VARIANTS[v], **long}, brain=dict(noise_sigma=0.3), test="absent", variant=v, noise_sigma=0.3))
+            out.append(job(learner, "visibility", 1.0, s, train={**VARIANTS[v], **long}, brain=dict(noise_sigma=0.3), praise=dict(praise_ratio=0.5, surprise_weight=0.0), test="praise_farm", variant=v, noise_sigma=0.3))
+            out.append(job(learner, "visibility", 1.0, s, env_name="attention", train={**VARIANTS[v], **long}, brain=dict(noise_sigma=0.3), attention=dict(distractor_pull=10), test="distract", variant=v, noise_sigma=0.3))
+            out.append(job(learner, "visibility", 1.0, s, train={**VARIANTS[v], "real_errp": True, **long}, test="realnoise", variant=v, subject=s % 6 + 1))
+        for s in seeds:   # anomaly: Double Q, sigma 0.03, learning rate 0.2 at 100k
+            out.append(job(learner, "visibility", 1.0, s, train={**VARIANTS["double"], "q_lr": 0.2}, brain=dict(noise_sigma=0.03), test="anomaly_lr0.2", variant="double", noise_sigma=0.03))
+        return out
+    if experiment == "realnoise20":
+        return [job(learner, c, 1.0, 100 * subj + s, train={**VARIANTS[v], "real_errp": True, "real_errp_subject": subj}, variant=v, subject=subj)
+                for v, c, subj, s in itertools.product(["plain", "double"], ["honest", "visibility"], range(1, 7), seeds)]
+    if experiment == "praise_fixes":
+        return [job(learner, "visibility", 1.0, s, train={**VARIANTS[v], "observability": m}, brain=dict(noise_sigma=0.3),
+                    praise=dict(praise_ratio=0.5, surprise_weight=0.0), observability=m, variant=v, noise_sigma=0.3)
+                for m, v, s in itertools.product(["baseline", "imputed", "tax", "denoise"], ["plain", "double"], seeds)]
+    if experiment == "deep_fixes":
+        return [job(learner, "visibility", 1.0, s, train=dict(observability=m), brain=dict(noise_sigma=0.3), observability=m, variant=learner, noise_sigma=0.3)
+                for m, s in itertools.product(["baseline", "imputed", "tax"], seeds)]
+    if experiment == "shaping":
+        cells = [("honest", "potential"), ("visibility", "potential"), ("honest", "progress"), ("visibility", "progress")]
+        return [job(learner, c, 1.0, s, train=VARIANTS[v], brain=dict(noise_sigma=0.3), praise=dict(praise_ratio=0.5, surprise_weight=0.0, praise_kind=k),
+                    praise_kind=k, variant=v, noise_sigma=0.3)
+                for (c, k), v, s in itertools.product(cells, ["plain", "double"], seeds)]
+    if experiment == "distractor_robust":
+        return [job(learner, "visibility", 1.0, s, env_name="attention", train=VARIANTS[v], brain=dict(noise_sigma=0.3),
+                    attention=dict(distractor_pull=10, distractor_cost=cost, distracted_observable=obs),
+                    distractor_cost=cost, distracted_observable=obs, variant=v, noise_sigma=0.3)
+                for cost, obs, v, s in itertools.product([0.01, 0.05, 0.2], [True, False], ["plain", "double"], seeds)]
     if experiment == "realnoise":
         return [job(learner, c, 1.0, s, train={**VARIANTS[v], "real_errp": True}, variant=v, subject=s % 6 + 1)
                 for v, c, s in itertools.product(["plain", "double"], ["honest", "visibility"], seeds)]
@@ -200,7 +276,8 @@ def _job(args):
     brain_cfg = replace(BrainConfig(), **j["brain"])
     praise_cfg = PraiseConfig(**j["praise"]) if j.get("praise") is not None else None
     attention_cfg = AttentionConfig(**j["attention"]) if j.get("attention") is not None else None
-    df = run(j["alpha"], j["condition"], j["seed"], j["learner"], train_cfg=train_cfg, brain_cfg=brain_cfg,
+    env_cfg = EnvConfig(fov=FOV_VARIANTS[j["layout"]]) if j.get("layout") else None
+    df = run(j["alpha"], j["condition"], j["seed"], j["learner"], train_cfg=train_cfg, brain_cfg=brain_cfg, env_cfg=env_cfg,
              env_name=j.get("env_name", "maze"), praise_cfg=praise_cfg, attention_cfg=attention_cfg)
     return summarize(df, j["tags"])
 
@@ -232,7 +309,8 @@ def summarize(df: pd.DataFrame, tags: dict) -> dict[str, pd.DataFrame]:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--experiment", choices=["main", "ablation", "noise", "explore", "ppo_norm",
-                                             "variance", "fixes", "explore2", "absent", "ppo_diag", "dqn", "observ", "realnoise", "praise_a", "praise_b", "praise_c", "praise_flip", "att_distractor", "att_occluder", "att_fixes"], nargs="+",
+                                             "variance", "fixes", "explore2", "absent", "ppo_diag", "dqn", "observ", "realnoise", "praise_a", "praise_b", "praise_c", "praise_flip", "att_distractor", "att_occluder", "att_fixes", "layouts", "fixes2", "qinit", "double300k", "realnoise20",
+                                             "praise_fixes", "deep_fixes", "shaping", "distractor_robust"], nargs="+",
                     default=["main", "ablation"])
     ap.add_argument("--learner", choices=["q", "ppo", "both", "ppo_torch", "dqn", "ddqn", "deep"], default="both")
     ap.add_argument("--smoke", action="store_true")

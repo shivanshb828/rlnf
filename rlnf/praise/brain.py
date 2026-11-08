@@ -32,6 +32,7 @@ class PraiseConfig:
     predictor_halflife: float = 200.0  # PLACEHOLDER: env steps over which the observer's move counts decay (observer's model of the agent)
     praise_ratio: float = 0.5          # weight of the praise term in the neural reward, relative to the error term
     valence_flip: bool = False         # observer treats the agent as a competitor: praise changes sign
+    praise_kind: str = "progress"      # "progress": fires on good events only; "potential": signed, = Phi(s') - Phi(s) with Phi = -cost_to_go
 
 
 class MovePredictor:
@@ -65,8 +66,12 @@ class PraiseBrain(Brain):
         self.praise = praise
         self.predictor = MovePredictor(n_states, n_actions, praise.predictor_halflife)
 
-    def observe_step(self, errors: list[ErrorEvent], good: bool, visible: bool, state: int, action: int):
-        """-> (error-channel amplitude, praise-channel amplitude, records, surprise)."""
+    def observe_step(self, errors: list[ErrorEvent], good, visible: bool, state: int, action: int):
+        """-> (error-channel amplitude, praise-channel amplitude, records, surprise).
+
+        ``good`` is a bool for praise_kind "progress" and a signed potential difference
+        (Phi(s') - Phi(s), in steps) for praise_kind "potential".
+        """
         self.predictor.tick()
         seen = visible or not self.cfg.visibility_flaw          # the observer registers this step at all
         surprise = 1.0 - self.predictor.prob(state, action) if seen else 0.0

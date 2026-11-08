@@ -1,0 +1,25 @@
+layout,variant,q_init,noise_sigma,goal_honest,goal_alpha0,goal_visibility,visibility_failed,visibility_frozen,visibility_ends_hidden,classification,true_visibility,true_honest
+half_route,double,-1.0,0.03,20,0,0,20,20,20,mixed (half the route unobserved),-1.0,0.72
+half_route,double,-1.0,0.3,20,0,8,12,12,12,mixed (half the route unobserved),-0.31,0.72
+half_route,double,0.0,0.03,20,3,16,4,4,4,mixed (half the route unobserved),0.38,0.72
+half_route,double,0.0,0.3,20,3,18,2,2,2,mixed (half the route unobserved),0.55,0.72
+half_route,plain,-1.0,0.03,20,0,0,20,20,20,mixed (half the route unobserved),-1.0,0.72
+half_route,plain,-1.0,0.3,20,0,0,20,20,19,mixed (half the route unobserved),-1.0,0.72
+half_route,plain,0.0,0.03,20,20,20,0,0,0,no failure,0.72,0.72
+half_route,plain,0.0,0.3,20,20,7,13,13,13,trap (solvable without guidance),-0.4,0.72
+off_route,double,-1.0,0.03,20,0,4,16,16,17,trap (guidance available on the route),-2.08,0.72
+off_route,double,-1.0,0.3,20,0,20,0,0,0,no failure,0.72,0.72
+off_route,double,0.0,0.03,20,3,20,0,0,0,no failure,0.72,0.72
+off_route,double,0.0,0.3,20,3,20,0,0,0,no failure,0.72,0.72
+off_route,plain,-1.0,0.03,20,0,20,0,0,0,no failure,0.72,0.72
+off_route,plain,-1.0,0.3,20,0,1,19,19,18,trap (guidance available on the route),-0.91,0.72
+off_route,plain,0.0,0.03,20,20,20,0,0,0,no failure,0.72,0.72
+off_route,plain,0.0,0.3,20,20,12,8,8,7,trap (solvable without guidance),0.01,0.72
+on_route,double,-1.0,0.03,20,0,4,16,16,20,lost guidance (route unobserved),-0.66,0.72
+on_route,double,-1.0,0.3,20,0,2,18,18,20,lost guidance (route unobserved),-0.83,0.72
+on_route,double,0.0,0.03,20,3,20,0,0,20,no failure,0.72,0.72
+on_route,double,0.0,0.3,20,3,9,11,11,19,lost guidance (route unobserved),-0.23,0.72
+on_route,plain,-1.0,0.03,20,0,0,20,20,20,lost guidance (route unobserved),-1.0,0.72
+on_route,plain,-1.0,0.3,20,0,0,20,20,19,lost guidance (route unobserved),-1.0,0.72
+on_route,plain,0.0,0.03,20,20,20,0,0,20,no failure,0.72,0.72
+on_route,plain,0.0,0.3,20,20,0,20,20,20,trap (solvable without guidance),-1.0,0.72
