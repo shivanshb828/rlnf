@@ -108,6 +108,11 @@ class TrainConfig:
     decoder_samples: int = 5_000  # honest-brain random-policy steps used to fit the decoder
     # Tabular Q-learning
     q_lr: float = 0.1
+    q_variant: str = "plain"      # "plain", "double" (van Hasselt 2010), "maxmin" (Lan et al. 2020), "asrn" (Vivanti et al. 2019)
+    q_maxmin_n: int = 2           # number of Q-tables for maxmin
+    asrn_warmup: int = 10_000     # ASRN: steps of warm-up used to bin update magnitudes and estimate per-bin reward std
+    asrn_bins: int = 10           # ASRN: number of equal-width bins over the update magnitude (paper: unspecified)
+    asrn_min_samples: int = 10    # ASRN: bins with fewer warm-up samples get no noise and do not set the target std
     # Initial Q-value. -1.0 = -step_penalty / (1 - gamma), the return of a policy that
     # never reaches the goal. With 0.0 the step cost acts as an exploration bonus and
     # tabular Q-learning solves the maze at alpha = 0 in 20/20 seeds (see README).

@@ -24,6 +24,9 @@ import pandas as pd
 from rlnf.brain import Brain, Decoder, fit_decoder
 from rlnf.config import CONDITIONS, BrainConfig, EnvConfig, TrainConfig
 from rlnf.env import GridWorld
+from rlnf.absent_supervisor import ABSENT_SUPERVISOR_CFG, AbsentSupervisor
+
+ENVS = {"maze": (GridWorld, EnvConfig()), "absent_supervisor": (AbsentSupervisor, ABSENT_SUPERVISOR_CFG)}
 
 
 class NeuralRewardWrapper(gym.Wrapper):
@@ -45,6 +48,8 @@ class NeuralRewardWrapper(gym.Wrapper):
             steps=0, reached_goal=False, true_return=0.0, neural_return=0.0, agent_return=0.0,
             n_errors=0, errors_in_fov=0, errors_out_fov=0, repeated_errors=0, first_time_errors=0,
             n_hazard=0, n_wall=0, n_away=0, errors_perceived=0, hab_factor_sum=0.0,
+            # per-region agent-reward sums (region = FOV status of the cell after the step)
+            n_visible=0, r_sum_visible=0.0, r_sq_visible=0.0, n_hidden=0, r_sum_hidden=0.0, r_sq_hidden=0.0,
         )
         self._error_keys: dict = {}   # (cell before the step, action) -> count of error steps this episode
 
@@ -66,6 +71,10 @@ class NeuralRewardWrapper(gym.Wrapper):
         s["true_return"] += true_reward
         s["neural_return"] += neural_reward
         s["agent_return"] += reward
+        region = "visible" if self.env.unwrapped.fov[self.env.unwrapped.pos] else "hidden"
+        s[f"n_{region}"] += 1
+        s[f"r_sum_{region}"] += reward
+        s[f"r_sq_{region}"] += reward * reward
         for rec in records:
             s["n_errors"] += 1
             s["errors_in_fov" if rec.in_fov else "errors_out_fov"] += 1
@@ -88,17 +97,19 @@ class NeuralRewardWrapper(gym.Wrapper):
             counts = list(self._error_keys.values())
             out["stuckness"] = (max(counts) - 1) / out["steps"] if counts else 0.0
             out["repeat_frac"] = sum(c - 1 for c in counts) / out["steps"]
+            out["hidden_share"] = out["n_hidden"] / out["steps"]
             info["episode_stats"] = out
         return obs, reward, terminated, truncated, info
 
 
-def build_env(env_cfg: EnvConfig, brain_cfg: BrainConfig, train_cfg: TrainConfig, seed: int) -> NeuralRewardWrapper:
+def build_env(env_cfg: EnvConfig, brain_cfg: BrainConfig, train_cfg: TrainConfig, seed: int,
+              env_cls=GridWorld) -> NeuralRewardWrapper:
     """Env + brain (with the condition's flaws) + decoder fit on an honest brain.
 
     Same seed -> same decoder and same noise draws in every brain condition.
     """
     decoder = fit_decoder(env_cfg, brain_cfg, n_steps=train_cfg.decoder_samples, seed=seed)
-    return NeuralRewardWrapper(GridWorld(env_cfg), Brain(brain_cfg, seed=seed), decoder, train_cfg.alpha, train_cfg.centered)
+    return NeuralRewardWrapper(env_cls(env_cfg), Brain(brain_cfg, seed=seed), decoder, train_cfg.alpha, train_cfg.centered)
 
 
 # ---------------------------------------------------------------------------
@@ -142,40 +153,129 @@ def mean_kl(p: np.ndarray, q: np.ndarray) -> float:
 
 
 # ---------------------------------------------------------------------------
-# Tabular Q-learning
+# Tabular Q-learning: plain, Double, Maxmin, ASRN
 # ---------------------------------------------------------------------------
 def _greedy(q_row: np.ndarray, rng: np.random.Generator) -> int:
     best = np.flatnonzero(q_row == q_row.max())
     return int(rng.choice(best))
 
 
+class ASRN:
+    """Adaptive Symmetric Reward Noising (Vivanti et al. 2019), as described in the paper.
+
+    The paper identifies "areas" by the magnitude of the Q update, v_t = |lr * TD error|,
+    bins v_t during a warm-up period, computes the std of the rewards that fell into each
+    bin, S_b, and afterwards replaces every reward by r' ~ N(r, S_max^2 - S_b^2) where b is
+    the bin of the current v_t. Mean reward is unchanged; low-variance "boring" areas get
+    noise until all areas have the variance of the noisiest one.
+
+    Choices the paper leaves open (see README): warm-up length (`asrn_warmup` steps);
+    number of bins (`asrn_bins`, equal width over the warm-up range of v_t, values outside
+    clipped to the edge bins); bin stds frozen after warm-up; bins with fewer than
+    `asrn_min_samples` samples get no noise and do not set S_max; the TD error uses the
+    next state (the paper's formula has a typo there); the noised reward is used only in
+    the Q update, never in the logs.
+    """
+
+    def __init__(self, cfg: TrainConfig, rng: np.random.Generator):
+        self.cfg, self.rng = cfg, rng
+        self.samples: list[tuple[float, float]] = []
+        self.edges = None
+        self.noise_std = None
+
+    def noise(self, reward: float, update_magnitude: float) -> float:
+        if self.edges is None:
+            self.samples.append((update_magnitude, reward))
+            if len(self.samples) >= self.cfg.asrn_warmup:
+                self._fit()
+            return reward
+        b = self._bin(update_magnitude)
+        return reward + self.rng.normal(0.0, self.noise_std[b]) if self.noise_std[b] > 0 else reward
+
+    def _bin(self, v) -> int:
+        return int(np.clip(np.searchsorted(self.edges, v, side="right") - 1, 0, self.cfg.asrn_bins - 1))
+
+    def _fit(self) -> None:
+        v, r = np.array(self.samples).T
+        self.edges = np.linspace(v.min(), v.max() + 1e-12, self.cfg.asrn_bins + 1)
+        bins = np.array([self._bin(x) for x in v])
+        std = np.full(self.cfg.asrn_bins, np.nan)
+        for b in range(self.cfg.asrn_bins):
+            if (bins == b).sum() >= self.cfg.asrn_min_samples:
+                std[b] = r[bins == b].std()
+        s_max = np.nanmax(std)
+        std = np.where(np.isnan(std), s_max, std)
+        self.noise_std = np.sqrt(np.maximum(0.0, s_max ** 2 - std ** 2))
+        self.samples = []
+
+
+class TabularQ:
+    """Plain, Double (van Hasselt 2010), Maxmin (Lan et al. 2020) and ASRN Q-learning behind one interface."""
+
+    def __init__(self, n_states: int, n_actions: int, cfg: TrainConfig, rng: np.random.Generator):
+        self.cfg, self.rng = cfg, rng
+        n_tables = {"plain": 1, "asrn": 1, "double": 2, "maxmin": cfg.q_maxmin_n}[cfg.q_variant]
+        self.Q = np.full((n_tables, n_states, n_actions), cfg.q_init)
+        self.asrn = ASRN(cfg, rng) if cfg.q_variant == "asrn" else None
+
+    def values(self) -> np.ndarray:
+        """The Q-table the agent acts on (and that gets logged)."""
+        if self.cfg.q_variant == "double":
+            return self.Q.sum(axis=0)        # van Hasselt: behave greedily w.r.t. Q_A + Q_B
+        if self.cfg.q_variant == "maxmin":
+            return self.Q.min(axis=0)        # Lan et al.: behave w.r.t. the element-wise minimum
+        return self.Q[0]
+
+    def update(self, s: int, a: int, r: float, s2: int, terminated: bool) -> None:
+        gamma, lr, v = self.cfg.gamma, self.cfg.q_lr, self.cfg.q_variant
+        if v == "double":
+            i = int(self.rng.integers(2))
+            a_star = _greedy(self.Q[i, s2], self.rng)                     # argmax from one table ...
+            target = r if terminated else r + gamma * self.Q[1 - i, s2, a_star]   # ... evaluated by the other
+        elif v == "maxmin":
+            i = int(self.rng.integers(len(self.Q)))                       # update one randomly chosen table
+            target = r if terminated else r + gamma * self.Q.min(axis=0)[s2].max()
+        else:
+            i = 0
+            target = r if terminated else r + gamma * self.Q[0, s2].max()
+            if self.asrn is not None:
+                r = self.asrn.noise(r, abs(lr * (target - self.Q[0, s, a])))
+                target = r if terminated else r + gamma * self.Q[0, s2].max()
+        self.Q[i, s, a] += lr * (target - self.Q[i, s, a])
+
+
+def region_values(values: np.ndarray, env) -> dict[str, float]:
+    """Mean state value (max_a Q) over the open cells of each observer region."""
+    return {f"q_{name}": float(values[mask].max(axis=1).mean()) if mask.any() else np.nan
+            for name, mask in env.unwrapped.region_masks().items()}
+
+
 def train_q(env: NeuralRewardWrapper, cfg: TrainConfig, seed: int) -> list[dict]:
     rng = np.random.default_rng(seed)
-    n_states, n_actions = env.observation_space.shape[0], env.action_space.n
-    Q = np.full((n_states, n_actions), cfg.q_init)
+    learner = TabularQ(env.observation_space.shape[0], env.action_space.n, cfg, rng)
     Q_ref = None                       # snapshot at ref_fraction of training
     ref_step = int(cfg.ref_fraction * cfg.total_steps)
     rows: list[dict] = []
     visited: set[int] = set()
     decay_steps = max(1, int(cfg.q_eps_fraction * cfg.total_steps))
-    policy = lambda obs: _greedy(Q[int(obs.argmax())], rng)  # noqa: E731
+    policy = lambda obs: _greedy(learner.values()[int(obs.argmax())], rng)  # noqa: E731
 
     obs, _ = env.reset(seed=seed)
     s = int(obs.argmax())
     for t in range(1, cfg.total_steps + 1):
         eps = cfg.q_eps_start + (cfg.q_eps_end - cfg.q_eps_start) * min(1.0, t / decay_steps)
-        a = int(rng.integers(n_actions)) if rng.random() < eps else _greedy(Q[s], rng)
+        a = int(rng.integers(env.action_space.n)) if rng.random() < eps else _greedy(learner.values()[s], rng)
         obs, r, terminated, truncated, info = env.step(a)
         s2 = int(obs.argmax())
-        target = r if terminated else r + cfg.gamma * Q[s2].max()
-        Q[s, a] += cfg.q_lr * (target - Q[s, a])
+        learner.update(s, a, r, s2, terminated)
         visited.add(s)
         s = s2
         if terminated or truncated:
-            rows.append(dict(phase="train", step=t, **info["episode_stats"]))
+            rows.append(dict(phase="train", step=t, **info["episode_stats"], **region_values(learner.values(), env)))
             obs, _ = env.reset()
             s = int(obs.argmax())
         if t % cfg.checkpoint_every == 0:
+            Q = learner.values()
             if Q_ref is None and t >= ref_step:
                 Q_ref = Q.copy()
             kl = np.nan
@@ -256,12 +356,13 @@ def train_ppo(env: NeuralRewardWrapper, cfg: TrainConfig, seed: int) -> list[dic
 # Entry point
 # ---------------------------------------------------------------------------
 def run(alpha: float, condition: str, seed: int, learner: str,
-        train_cfg: TrainConfig = TrainConfig(), env_cfg: EnvConfig = EnvConfig(),
-        brain_cfg: BrainConfig = BrainConfig()) -> pd.DataFrame:
+        train_cfg: TrainConfig = TrainConfig(), env_cfg: EnvConfig | None = None,
+        brain_cfg: BrainConfig = BrainConfig(), env_name: str = "maze") -> pd.DataFrame:
     """One training run -> tidy DataFrame (train episodes, checkpoints, eval episodes)."""
     train_cfg = replace(train_cfg, alpha=alpha, learner=learner)
     brain_cfg = replace(brain_cfg, **CONDITIONS[condition])
-    env = build_env(env_cfg, brain_cfg, train_cfg, seed)
+    env_cls, default_cfg = ENVS[env_name]
+    env = build_env(env_cfg or default_cfg, brain_cfg, train_cfg, seed, env_cls)
     t0 = time.time()
     rows = {"q": train_q, "ppo": train_ppo}[learner](env, train_cfg, seed)
     df = pd.DataFrame(rows)

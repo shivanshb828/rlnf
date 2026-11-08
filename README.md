@@ -642,3 +642,173 @@ seeds at α = 1 and 4 (σ = 0.3; not re-run at higher noise). Honest brain:
 - The noise sweep holds the calibration error rate (30%) fixed; at σ = 0.8 the
   decoder's p_clean is 0.24, so the uncentered tax would be large there.
 - PPO normalisation was tested only at σ = 0.3.
+
+## v3: is the freeze the Boring Areas Trap?
+
+Prior work that changed the plan is listed in `RELATED_WORK.md`. Hypothesis
+tested here: our visibility-flaw freezing is Vivanti et al.'s Boring Areas Trap
+(BAT): the hidden half is a low-variance "boring" area, the visible half a
+high-variance one, and Q-learning cannot leave the boring area. Scripts:
+`experiments/sweep.py --experiment variance fixes explore2 absent`,
+`experiments/trap.py`. Outputs: `results/summary_{variance,fixes,explore2,absent}.csv`,
+`results/variance_by_region.png`, `results/fixes.png`,
+`results/exploration_regions.png`.
+
+### 1. Variance check (Q-learning, α = 1, centered, first 20% of training, 10 seeds)
+
+Per-step agent reward by region (region = FOV status of the cell the agent is in):
+
+| brain | σ | mean visible | mean hidden | var visible | var hidden | var ratio | seeds frozen (of 10) |
+|---|---|---|---|---|---|---|---|
+| visibility | 0.03 | -0.60 | -0.010 | 0.246 | 0.0000 | 2·10⁹ | 0 |
+| visibility | 0.1 | -0.60 | -0.010 | 0.246 | 0.0005 | 522 | 2 |
+| visibility | 0.2 | -0.54 | -0.008 | 0.224 | 0.011 | 19.5 | 10 |
+| visibility | 0.3 | -0.45 | -0.007 | 0.182 | 0.026 | 7.1 | 10 |
+| visibility | 0.5 | -0.27 | -0.006 | 0.106 | 0.036 | 2.9 | 10 |
+| visibility | 0.8 | -0.13 | -0.007 | 0.048 | 0.027 | 1.8 | 10 |
+| honest | 0.03 | -0.60 | -0.81 | 0.249 | 0.162 | 1.5 | 0 |
+| honest | 0.3 | -0.42 | -0.55 | 0.186 | 0.152 | 1.2 | 0 |
+| honest | 0.8 | -0.12 | -0.16 | 0.051 | 0.048 | 1.1 | 1 |
+
+- **The hidden half does have lower variance under the visibility flaw** (ratio
+  from 2·10⁹ down to 1.8), and roughly equal variance under the honest brain.
+- **But the variance gap does not jump at the freeze cliff: it is largest where
+  nobody freezes.** At σ = 0.03 the hidden half is perfectly quiet (variance
+  0) and 0/10 seeds freeze; freezing switches on exactly when the hidden half
+  *acquires* variance (0.0005 at σ = 0.1: 2/10; 0.011 at σ = 0.2: 10/10).
+- **The hidden half is not "boring" in Vivanti's sense (low mean, low
+  variance).** During exploration its mean reward (-0.01, the step cost) is
+  far *higher* than the visible half's (-0.6 to -0.13), because random actions
+  in the visible half get penalised and random actions in the hidden half do
+  not. The agent moves to the hidden half for its mean, not despite it.
+
+### 2. Known fixes (visibility and honest brains, α = 1, centered, 20 seeds per cell)
+
+Implementations in `rlnf/train.py` (`TrainConfig.q_variant`): Double
+Q-learning (van Hasselt 2010: two tables, act on their sum, bootstrap one with
+the other's argmax), Maxmin (Lan et al. 2020: N tables, act and bootstrap on
+their element-wise minimum, one random table updated per step), ASRN (Vivanti
+et al. 2019). ASRN choices the paper leaves open: areas are identified by the
+magnitude of the Q update `|lr · TD error|` as in the paper (not by state);
+10 equal-width bins over the warm-up range of that magnitude; warm-up = the
+first 10,000 steps; per-bin reward std frozen after warm-up; bins with fewer
+than 10 samples get no noise and do not set the target; the paper's TD formula
+has a typo (it bootstraps from the current state), corrected to the next
+state; the noised reward feeds only the Q update.
+
+Seeds frozen (of 20) / mean true return:
+
+| variant | visibility σ=0.1 | σ=0.3 | σ=0.5 | honest σ=0.1 | σ=0.3 | σ=0.5 |
+|---|---|---|---|---|---|---|
+| plain | 3 / 0.46 | 19 / -0.91 | 19 / -0.91 | 0 / 0.72 | 0 / 0.72 | 0 / 0.72 |
+| **double** | **0 / 0.72** | **0 / 0.72** | **1 / 0.63** | 0 / 0.72 | 0 / 0.72 | 0 / 0.72 |
+| maxmin N=2 | 5 / 0.29 | 4 / 0.35 | 4 / 0.35 | 0 / 0.72 | 0 / 0.72 | 0 / 0.72 |
+| maxmin N=4 | 12 / -0.36 | 12 / -0.49 | 18 / -1.05 | 0 / 0.72 | 0 / 0.72 | 0 / 0.72 |
+| maxmin N=8 | 12 / -0.31 | 11 / -1.60 | 20 / -3.43 | 0 / 0.72 | 0 / 0.72 | 0 / 0.72 |
+| ASRN | 3 / 0.46 | 20 / -1.00 | 20 / -2.13 | 0 / 0.72 | 0 / 0.72 | 1 / 0.63 |
+
+- **Double Q-learning removes the freeze** (0/20 at σ = 0.1 and 0.3, 1/20 at
+  0.5, mean true return 0.72) and **does not break the honest brain** (0/20
+  frozen, 0.72 at every σ).
+- **Maxmin makes it worse**, monotonically in N (N = 8: 12-20/20 frozen even
+  at σ = 0.1 where plain has 3/20), while remaining perfect on the honest brain.
+- **ASRN does nothing** (indistinguishable from plain at σ = 0.1 and 0.3, worse
+  at 0.5). Adding symmetric noise to the quiet area is exactly what the cliff
+  in section 1 says causes the freeze.
+
+The pattern (over-estimation-corrected learner fixes it, under-estimating
+learner worsens it, variance-equalising fix does nothing) identifies the
+mechanism as **maximisation bias**, not the BAT: the hidden half's rewards
+are zero-mean noise with no penalties to oppose them, the max operator turns
+that noise into inflated values, and Double Q's decoupled argmax/evaluation
+removes the inflation. Maxmin's pessimism acts on both halves, but the visible
+half already has a genuinely negative mean during exploration, so pessimism
+widens the gap.
+
+### 3. Exploration discrepancy (visibility, α = 1, σ = 0.3, centered, 20 seeds per schedule)
+
+`exploration_regions.png` logs, per 5k-step bin, the share of steps spent in
+the hidden half, the mean state value `max_a Q(s, a)` over each region's
+cells, and the mean reward received in each region.
+
+| ε schedule | frozen | reach goal | late hidden share | hidden-half Q at peak | visible-half reward at end |
+|---|---|---|---|---|---|
+| low (1 → 0.01 over 25%) | 13/20 | 7/20 | 0.67 | -0.83 | ≈ 0.00 |
+| default (1 → 0.05 over 50%) | 19/20 | 1/20 | 0.94 | -0.72 | ≈ -0.10 |
+| high (1 → 0.3 over 90%) | 20/20 | 0/20 | 0.96 | -0.56 | ≈ -0.25 |
+
+Why exploration hurts here, in plain terms. The true value of standing in the
+hidden half is -1.0 (the step cost forever). Every schedule's estimate of it
+rises above -1.0, and **the more the agent explores, the higher the estimate
+climbs** (-0.83, -0.72, -0.56): each random action in the hidden half draws a
+fresh noise sample, and the max over four such samples per state is biased
+upward, so more samples mean more inflation. At the same time, every random
+action in the visible half that is a mistake is penalised, so the visible
+half's *received* reward stays negative for as long as exploration lasts
+(-0.25 per step under the high schedule at the end of training, ≈ 0 under the
+low schedule). Vivanti et al.'s argument that exploration helps assumes the
+interesting area has a higher mean that exploration will eventually sample.
+Here exploration itself lowers the visible half's sampled mean and raises the
+hidden half's estimated value, so it confirms the trap instead of breaking it.
+The schedule that explores least sees the least distorted picture and escapes
+in 7/20 seeds. This is consistent with section 2: the fix that removes the
+upward bias (Double Q) works without any change to exploration.
+
+### 4. Standard benchmark: absent supervisor (Leike et al. 2017)
+
+Ported to gymnasium in `rlnf/absent_supervisor.py` without the pycolab
+dependency (the environment is a 6x6 grid with a punishment tile; pycolab
+would have added a rendering engine for nothing). Original rewards divided by
+50 (goal 1.0, step 0.02, punishment 0.6) to sit on our scale; the supervisor
+(present with p = 0.5, visible to the agent as an observation bit) is the
+observer FOV, and the original punishment is replaced by the ErrP brain: the
+visibility-flawed brain fires only on errors the supervisor sees, the honest
+brain on all errors. Routes: 3 steps through the punishment tile (true return
+0.34) vs 9 steps around (0.82). Q-learning, α = 1, centered, `q_init = -2.0`
+(-step / (1 - γ) for this step cost), 20 seeds per cell.
+
+| brain | learner | σ | reach goal | take the shortcut (hazard entries > 0.25) | frozen | true return |
+|---|---|---|---|---|---|---|
+| honest | plain | 0.03 | 20/20 | 0/20 | 0/20 | 0.82 |
+| honest | plain | 0.3 | 20/20 | 0/20 | 0/20 | 0.82 |
+| honest | double | 0.03 | 20/20 | 0/20 | 0/20 | 0.82 |
+| honest | double | 0.3 | 20/20 | 4/20 | 0/20 | 0.77 |
+| visibility | plain | 0.03 | 20/20 | 20/20 | 0/20 | 0.59 |
+| visibility | plain | 0.3 | 19/20 | 18/20 | 1/20 | 0.45 |
+| visibility | double | 0.03 | 20/20 | 20/20 | 0/20 | 0.60 |
+| visibility | double | 0.3 | 20/20 | 19/20 | 0/20 | 0.57 |
+
+- **The absent-supervisor exploit replicates with the ErrP brain**: 18-20/20
+  visibility-flawed seeds take the punished shortcut (0.47-0.53 hazard
+  entries per episode, i.e. in the unsupervised half of episodes), 0/20
+  honest seeds do (plain).
+- **Freezing does not replicate there** (0-1/20): the goal is 3-9 steps away
+  in a 15-cell grid, so the sparse reward is found before any bias matters.
+- **Double Q does not remove the shortcut** (19-20/20), which is the right
+  outcome: taking the shortcut when unsupervised is genuinely optimal under
+  the agent's reward, not a bias artifact. Double Q only removed the
+  bias-driven freeze. At σ = 0.3 it slightly hurts the honest brain here
+  (4/20 shortcut seeds), consistent with mild under-estimation on a short
+  horizon.
+
+### Verdicts
+
+- **Is it the Boring Areas Trap?** No, not in Vivanti et al.'s sense. The
+  hidden half is low-variance but high-mean during exploration, the variance
+  gap is largest where nobody freezes, the freeze switches on when the quiet
+  area gains noise, the variance-equalising fix (ASRN) does nothing, and the
+  under-estimating learner (Maxmin) makes it worse. The mechanism is
+  maximisation bias on zero-mean noise in a region with no penalties to
+  oppose it, plus a genuinely lower sampled mean in the penalised region while
+  exploring.
+- **Which fix works?** Double Q-learning: 0/20 frozen at σ = 0.1 and 0.3,
+  1/20 at 0.5 (plain: 3, 19, 19), true return 0.72, and 0/20 frozen on the
+  honest brain at every σ. Maxmin (N = 2, 4, 8) and ASRN do not.
+- **Does it replicate on absent_supervisor?** The visibility exploit does
+  (18-20/20 shortcut seeds vs 0/20 honest); the freeze does not (0-1/20),
+  because the task is too easy for the bias to matter. Double Q leaves the
+  shortcut in place (19-20/20), as it should.
+- **Caveats.** Everything in v3 is tabular Q-learning at α = 1; PPO's freeze
+  (v2, 10/10) was not re-tested with a bias-corrected critic. ASRN was
+  implemented from the paper's prose with the documented choices; a different
+  binning could behave differently. The decoder band (65-91%) is approximate.

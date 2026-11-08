@@ -90,3 +90,34 @@ def test_stuckness_detects_a_frozen_agent():
                    if g.in_bounds((r + ACTIONS[a][0], c + ACTIONS[a][1])) else np.inf)
     good = rollout(env, optimal, 1)[0]
     assert good["stuckness"] == 0.0 and good["reached_goal"]
+
+
+@pytest.mark.parametrize("variant,n", [("double", 1), ("maxmin", 4), ("asrn", 1)])
+def test_q_variants_learn_the_safe_route_with_honest_feedback(variant, n):
+    df = run(1.0, "honest", 0, "q", TrainConfig(total_steps=50_000, q_variant=variant, q_maxmin_n=n))
+    true_ret, goal = eval_stats(df)
+    assert goal >= 0.95 and true_ret == pytest.approx(0.72, abs=0.05)
+
+
+def test_asrn_noise_equalises_bin_variance():
+    from rlnf.train import ASRN
+    cfg = TrainConfig(asrn_warmup=2_000, asrn_bins=4, asrn_min_samples=10)
+    asrn = ASRN(cfg, np.random.default_rng(0))
+    rng = np.random.default_rng(1)
+    # Warm-up: small updates come with quiet rewards, large updates with noisy rewards.
+    for _ in range(2_000):
+        quiet = rng.random() < 0.5
+        asrn.noise(rng.normal(0, 0.01 if quiet else 1.0), 0.01 if quiet else 1.0)
+    assert asrn.noise_std is not None
+    assert asrn.noise_std[0] == pytest.approx(1.0, abs=0.1)     # quiet bin gets ~unit noise
+    assert asrn.noise_std[-1] == pytest.approx(0.0, abs=1e-9)   # noisiest bin gets none
+    out = np.array([asrn.noise(0.0, 0.01) for _ in range(5_000)])
+    assert abs(out.mean()) < 0.05 and out.std() == pytest.approx(1.0, abs=0.1)   # symmetric
+
+
+def test_region_values_and_hidden_share_are_logged():
+    df = run(1.0, "visibility", 0, "q", TrainConfig(total_steps=5_000, eval_episodes=2))
+    tr = df[df.phase == "train"]
+    assert {"q_visible", "q_hidden", "hidden_share", "n_visible", "n_hidden"} <= set(tr.columns)
+    assert (tr.n_visible + tr.n_hidden == tr.steps).all()
+    assert tr.hidden_share.between(0, 1).all()

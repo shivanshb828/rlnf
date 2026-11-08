@@ -11,6 +11,10 @@ Experiments (seed counts in SEEDS)
   noise     Q, centered: noise_sigma x {honest, visibility} x alpha {0.25, 1, 4}
   explore   Q, visibility, alpha 1, sigma 0.3: learning rate x exploration schedule
   ppo_norm  PPO with VecNormalize reward scaling: {honest, visibility} x alpha {1, 4}
+  variance  Q, centered, alpha 1: noise_sigma x {honest, visibility}; per-region reward sums for the variance check
+  fixes     Q variants (plain, double, maxmin N=2/4/8, ASRN): {honest, visibility} x sigma {0.1, 0.3, 0.5}, alpha 1
+  explore2  Q, visibility, alpha 1, sigma 0.3: epsilon schedules, with per-region Q-values and time shares logged
+  absent    absent_supervisor env: {honest, visibility} x sigma {0.03, 0.3} x {plain, BEST_FIX}, alpha 1
 
 Outputs (prefix = experiment name)
   <prefix>_runs.csv         one row per run: greedy-eval means + late-training aggregates + the run's tags
@@ -44,17 +48,25 @@ EXPLORATION = {"low": dict(q_eps_end=0.01, q_eps_fraction=0.25),      # epsilon 
                "default": dict(q_eps_end=0.05, q_eps_fraction=0.5),
                "high": dict(q_eps_end=0.3, q_eps_fraction=0.9)}       # epsilon 1 -> 0.3 over 90% of training
 SEEDS = {("main", "q"): 20, ("main", "ppo"): 10, ("ablation", "q"): 20, ("ablation", "ppo"): 5,
-         ("noise", "q"): 20, ("explore", "q"): 20, ("ppo_norm", "ppo"): 10}
+         ("noise", "q"): 20, ("explore", "q"): 20, ("ppo_norm", "ppo"): 10,
+         ("variance", "q"): 10, ("fixes", "q"): 20, ("explore2", "q"): 20, ("absent", "q"): 20}
+VARIANTS = {"plain": dict(q_variant="plain"), "double": dict(q_variant="double"),
+            "maxmin2": dict(q_variant="maxmin", q_maxmin_n=2), "maxmin4": dict(q_variant="maxmin", q_maxmin_n=4),
+            "maxmin8": dict(q_variant="maxmin", q_maxmin_n=8), "asrn": dict(q_variant="asrn")}
+BEST_FIX = "double"   # Double Q-learning: 0/20 frozen at sigma 0.1 and 0.3 in the `fixes` experiment
+ABSENT_TRAIN = dict(q_init=-2.0)   # -step_penalty / (1 - gamma) for that env's step cost of 0.02
 BIN = 5_000
 TRAIN_METRICS = ["true_return", "neural_return", "agent_return", "reached_goal", "steps", "n_errors",
                  "errors_in_fov", "errors_out_fov", "repeated_errors", "first_time_errors",
-                 "n_hazard", "n_wall", "n_away", "mean_hab_factor", "stuckness", "repeat_frac"]
+                 "n_hazard", "n_wall", "n_away", "mean_hab_factor", "stuckness", "repeat_frac", "hidden_share",
+                 "n_visible", "r_sum_visible", "r_sq_visible", "n_hidden", "r_sum_hidden", "r_sq_hidden",
+                 "q_visible", "q_hidden"]
 
 
-def job(learner, condition, alpha, seed, train=None, brain=None, **tags) -> dict:
+def job(learner, condition, alpha, seed, train=None, brain=None, env_name="maze", **tags) -> dict:
     """A job = run() arguments + config overrides + tag columns copied into the output rows."""
-    return dict(learner=learner, condition=condition, alpha=alpha, seed=seed,
-                train=train or {}, brain=brain or {}, tags=tags)
+    return dict(learner=learner, condition=condition, alpha=alpha, seed=seed, env_name=env_name,
+                train=train or {}, brain=brain or {}, tags=dict(env_name=env_name, **tags))
 
 
 def jobs_for(experiment: str, learner: str) -> list[dict]:
@@ -78,6 +90,19 @@ def jobs_for(experiment: str, learner: str) -> list[dict]:
     if experiment == "ppo_norm":
         return [job(learner, c, a, s, train=dict(ppo_normalize_reward=True), ppo_normalize_reward=True)
                 for c, a, s in itertools.product(["honest", "visibility"], [1.0, 4.0], seeds)]
+    if experiment == "variance":
+        return [job(learner, c, 1.0, s, brain=dict(noise_sigma=sig), noise_sigma=sig)
+                for sig, c, s in itertools.product(SIGMAS, ["honest", "visibility"], seeds)]
+    if experiment == "fixes":
+        return [job(learner, c, 1.0, s, train=VARIANTS[v], brain=dict(noise_sigma=sig), variant=v, noise_sigma=sig)
+                for v, c, sig, s in itertools.product(VARIANTS, ["honest", "visibility"], [0.1, 0.3, 0.5], seeds)]
+    if experiment == "explore2":
+        return [job(learner, "visibility", 1.0, s, train=EXPLORATION[name], exploration=name, **EXPLORATION[name])
+                for name, s in itertools.product(EXPLORATION, seeds)]
+    if experiment == "absent":
+        return [job(learner, c, 1.0, s, env_name="absent_supervisor", train={**ABSENT_TRAIN, **VARIANTS[v]},
+                    brain=dict(noise_sigma=sig), variant=v, noise_sigma=sig)
+                for v, c, sig, s in itertools.product(["plain", BEST_FIX], ["honest", "visibility"], [0.03, 0.3], seeds)]
     raise ValueError(experiment)
 
 
@@ -99,7 +124,8 @@ def _job(args):
     j, total_steps = args
     train_cfg = replace(TrainConfig(total_steps=total_steps), **j["train"])
     brain_cfg = replace(BrainConfig(), **j["brain"])
-    df = run(j["alpha"], j["condition"], j["seed"], j["learner"], train_cfg=train_cfg, brain_cfg=brain_cfg)
+    df = run(j["alpha"], j["condition"], j["seed"], j["learner"], train_cfg=train_cfg, brain_cfg=brain_cfg,
+             env_name=j.get("env_name", "maze"))
     return summarize(df, j["tags"])
 
 
@@ -108,20 +134,24 @@ def summarize(df: pd.DataFrame, tags: dict) -> dict[str, pd.DataFrame]:
     ids = {**df.iloc[0][["learner", "condition", "alpha", "seed", "centered", "habituation_decay", "habituation_tau"]].to_dict(), **tags}
     tr, ck, ev = (df[df.phase == p] for p in ("train", "checkpoint", "eval"))
     late = tr[tr.step > 0.8 * tr.step.max()]
-    runs = {**ids, **{k: ev[k].mean() for k in TRAIN_METRICS},
+    metrics = [k for k in TRAIN_METRICS if k in tr.columns]          # PPO rows have no q_visible / q_hidden
+    runs = {**ids, **{k: ev[k].mean() for k in metrics if k in ev.columns},
+            **{f"late_{k}": late[k].mean() for k in ("n_visible", "r_sum_visible", "r_sq_visible", "n_hidden",
+                                                       "r_sum_hidden", "r_sq_hidden", "hidden_share")},
             "frac_out_fov_late": late.errors_out_fov.sum() / max(1, late.n_errors.sum()),
             "n_errors_late": late.n_errors.mean(), "stuckness_late": late.stuckness.mean(),
             "goal_rate_late": late.reached_goal.mean(), "wall_time_s": df.wall_time_s.iloc[0]}
     checkpoints = ck[["step", "kl", "true_return", "neural_return", "reached_goal", "stuckness", "repeat_frac",
                       "n_errors", "errors_out_fov", "n_hazard", "steps"]].assign(**ids)
-    curves = (tr.assign(bin=(tr.step // BIN) * BIN + BIN).groupby("bin")[TRAIN_METRICS].mean()
+    curves = (tr.assign(bin=(tr.step // BIN) * BIN + BIN).groupby("bin")[metrics].mean()
               .reset_index().assign(**ids))
     return dict(runs=pd.DataFrame([runs]), checkpoints=checkpoints, curves=curves)
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--experiment", choices=["main", "ablation", "noise", "explore", "ppo_norm"], nargs="+",
+    ap.add_argument("--experiment", choices=["main", "ablation", "noise", "explore", "ppo_norm",
+                                             "variance", "fixes", "explore2", "absent"], nargs="+",
                     default=["main", "ablation"])
     ap.add_argument("--learner", choices=["q", "ppo", "both"], default="both")
     ap.add_argument("--smoke", action="store_true")

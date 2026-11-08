@@ -1,0 +1,4 @@
+exploration,q_eps_end,q_eps_fraction,n_seeds,k_frozen,k_goal,true_return,hidden_share_late,q_visible,q_hidden
+default,0.05,0.5,20,19,1,-0.9140000000000004,0.9363706979632717,,
+high,0.3,0.9,20,20,0,-1.0000000000000004,0.9605775000000001,,
+low,0.01,0.25,20,13,7,-0.44800000000000023,0.6732573981075546,,

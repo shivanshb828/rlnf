@@ -29,7 +29,9 @@ FROZEN = 0.3
 COND_COLOR = {"honest": "#2a78d6", "visibility": "#eb6834"}
 COND_MARKER = {"honest": "o", "visibility": "s"}
 INK, MUTED, GRID, SURFACE = "#0b0b0b", "#898781", "#e1e0d9", "#fcfcfb"
-LIT_BAND = (65.0, 80.0)   # approximate single-trial ErrP decoder accuracy range reported in the literature
+# Approximate single-trial ErrP decoder range: ~80% (Iturrate et al. 2010) to 91% balanced accuracy (Kim et al. 2017,
+# Sci Rep); the lower end extends to the mid-60s reported for harder paradigms.
+LIT_BAND = (65.0, 91.0)
 
 plt.rcParams.update({
     "font.family": "sans-serif", "font.size": 9, "axes.edgecolor": "#c3c2b7", "axes.labelcolor": INK,
@@ -81,7 +83,7 @@ def plot_noise(summary: pd.DataFrame, out: Path) -> None:
     fig, axes = plt.subplots(1, len(alphas), figsize=(4.4 * len(alphas), 3.6), sharey=True, squeeze=False)
     for ax, alpha in zip(axes[0], alphas):
         ax.axvspan(*LIT_BAND, color="#e1e0d9", alpha=0.6, lw=0, zorder=0)
-        ax.text(np.mean(LIT_BAND), 10.0, "approx. range of real\nsingle-trial ErrP decoders", ha="center", va="center",
+        ax.text(np.mean(LIT_BAND), 10.0, "approx. range of real single-trial\nErrP decoders (65-91% bACC;\nIturrate 2010, Kim 2017)", ha="center", va="center",
                 fontsize=7, color="#52514e")
         for cond in ("honest", "visibility"):
             g = d[(d.alpha == alpha) & (d.condition == cond)].sort_values("acc_pct")

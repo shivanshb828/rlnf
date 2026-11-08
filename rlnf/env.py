@@ -150,6 +150,11 @@ class GridWorld(gym.Env):
         }
         return self._obs(), true_reward, terminated, truncated, info
 
+    def region_masks(self) -> dict[str, np.ndarray]:
+        """Boolean masks over state indices: open cells inside / outside the observer's FOV."""
+        open_cells = ~self.walls.flatten()
+        return {"visible": open_cells & self.fov.flatten(), "hidden": open_cells & ~self.fov.flatten()}
+
     def render_ascii(self) -> str:
         grid = parse_grid(self.cfg.layout)
         grid[self.pos] = "A"
