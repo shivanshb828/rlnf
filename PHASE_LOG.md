@@ -367,3 +367,11 @@ observer is distracted.
 (= per-action tax here): 10/10, 10/10, 8/10. The constant penalty on unobserved steps
 transfers to function approximation and to the policy-gradient learner on this layout
 (where the unobserved region is off the route; see Phase B for where it does harm).
+
+## Phase E: claims updated
+
+`PAPER_NOTES.md` rewritten: every claim states layout type, learner, Q-init, training
+length and noise; the "Do not claim" list now opens with the three narrowed claims
+(Double Q only fixes off-route traps; "imputation" is a tax in the maze; "real noise" is
+i.i.d. real decoder outputs) plus init-dependence of freeze rates and the honest-brain
+oracle; a modelling-assumptions section precedes the claims.
