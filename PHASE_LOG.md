@@ -257,3 +257,47 @@ layout: plain 20/20 failed, Double Q 18/20, honest 0/20 failed.
 **q_init matters everywhere** (Phase C quantifies it): with q_init 0 the off-route freeze
 drops to 8/20 (plain) and 0/20 (Double Q), but the on-route failure stays at 20/20 for
 plain Q and rises to 11/20 for Double Q at σ 0.3.
+
+## Phase B: what each fix actually does (plain language)
+
+Two ablations added to `TrainConfig.observability`: `tax` (unobserved steps get the mean
+observed penalty, no state or action dependence) and `denoise` (unobserved steps get
+nothing, observed steps are not rescaled). Run with baseline / imputed / pessimistic /
+tax / denoise on the three maze layouts and absent-supervisor, visibility and honest
+brains, plain and Double Q, σ 0.3, q_init -1, 20 seeds per cell. Table
+`results/summary_fixes2.csv`, figure `figures/review_fixes_by_mechanism.png`.
+
+**The review's reading of "imputed" is right.** The fraction of unobserved steps priced
+from the per-(cell, action) table is 0.00 in every maze layout (hidden cells are never
+observed, so the model always falls back to the per-action mean) and 1.00 on
+absent-supervisor. In the maze, imputed and pessimistic produce identical seed counts in
+every cell.
+
+**Which mechanism carries each fix (visibility brain; seeds failing to reach the goal):**
+- Off-route blind spot: baseline plain 19/20, Double Q 0/20. Tax 1/20 and 0/20;
+  pessimistic = imputed 0/20 and 0/20; denoise 4/20 and **13/20**. A constant penalty on
+  unobserved steps is the whole fix; removing the noise alone helps plain Q partly and
+  harms Double Q (its baseline is already 0/20). The fix is the tax, not imputation.
+- Half-route: baseline 20/20 and 12/20; tax = pessimistic = imputed 0/20 and 0/20 with
+  true return 0.72; denoise 10/20 and 20/20. Again the tax.
+- On-route (the route itself unobserved): baseline 20/20 and 18/20 fail. Tax: 0/20 fail,
+  but **20/20 reach the goal through the visible hazardous route** (true return -0.36
+  plain, -0.28 Double Q): the tax prices the unobserved safe route and pushes the agent
+  onto the watched hazards. Pessimistic = imputed: plain 12/20 fail (2 via hazards),
+  Double Q 20/20 fail. Denoise: 20/20 fail. Nothing fixes lost guidance; the tax
+  converts it into a worse, visible failure.
+- Absent-supervisor (shortcut seeds, n_hazard > 0.25): baseline 18/20 and 19/20; imputed
+  **0/20** (plain) and 7/20 (Double Q); pessimistic 19/20 and 18/20; tax 19/20 and 18/20;
+  denoise 20/20 and 20/20. Only true per-(cell, action) imputation works, because the
+  punishment tile is observed in supervised episodes and the model prices it when
+  unsupervised. A flat tax or per-action mean is too diluted to matter.
+
+**Side effects.** The hazardous-route side effect of the tax appears wherever the
+unobserved region is on the useful route (on-route: 20/20). On the honest brain no mode
+changes anything (0/20 failures everywhere; Double Q's 4/20 absent-supervisor shortcuts
+are its baseline under every mode).
+
+**Re-description for the paper.** In the maze, "imputed" = "pessimistic" = a constant
+tax on unobserved steps; it removes the off-route and half-route failures and is
+harmful on the on-route layout. True imputation exists only on absent-supervisor, where
+it is the only fix that removes the shortcut. "Noise removal" on its own is not a fix.
