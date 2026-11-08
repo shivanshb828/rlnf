@@ -68,8 +68,9 @@ def praise_a() -> pd.DataFrame:
             ax.plot(g.praise_ratio, g.k_frozen, color=col, marker="o", ms=5, lw=1.6, label=f"{v} Q", markeredgecolor=SURFACE)
         ax.set_title(f"visibility brain, σ = {sig:g}", loc="left", fontsize=9)
         ax.set_xlabel("praise ratio (weight of the praise term)"); ax.set_xticks([0, 0.25, 0.5, 1.0]); ax.set_ylim(-0.5, 21)
-    axes[0, 0].set_ylabel("seeds frozen (of 20)"); axes[0, 0].legend(fontsize=8)
-    fig.suptitle("Does praise fix freezing? (α = 1, centered, surprise weight 0, 20 seeds per point)", x=0.01, ha="left", fontsize=10)
+    axes[0, 0].set_ylabel("seeds stuck in a cycle, never reaching the goal (of 20)"); axes[0, 0].legend(fontsize=8)
+    fig.suptitle("Does praise fix freezing? No: with praise > 0 plain Q farms praise across the blind-spot boundary (α = 1, 20 seeds per point)",
+                 x=0.01, ha="left", fontsize=10)
     fig.tight_layout(); fig.savefig(FIGURES / "part2_praise_vs_freeze.png", dpi=150); plt.close(fig)
     return s
 

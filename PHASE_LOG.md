@@ -89,3 +89,51 @@ then samples a real held-out output per simulated step. With one subject per see
 visibility + Double Q froze 2/20 (both at the two worst subjects); honest + plain Q
 froze 2/20 (again the two worst subjects); honest + Double Q 0/20. The cliff holds:
 every real decoder sits on its frozen side, and the fix from v3 transfers.
+
+## Phase 2: praise hacking (plain language)
+
+Code: `rlnf/praise/` (a reward-positivity-like "praise" channel that fires on good events,
+0.5x the ErrP amplitude and 1.5x its noise, with its own decoder; an observer model that
+predicts the agent's next move so that "surprise" can scale both channels; a valence-flip
+switch). Sweeps `praise_a/b/c/flip`, analysis `experiments/part2.py`.
+
+**2a. Does praise fix freezing? No.** Visibility brain, 20 seeds per cell. Plain Q never
+reaches the goal at any praise ratio > 0: 20/20 stuck at ratios 0.25, 0.5 and 1 at both
+σ = 0.03 and 0.3. At σ = 0.03 praise *creates* the failure (0/20 stuck without praise,
+20/20 with it). What the stuck agents do is not the Part 1 freeze but a new exploit,
+**praise farming across the blind-spot boundary**: from the start cell they step up into
+the hidden half (a mistake nobody sees, reward -0.01) and step back down into view (a step
+toward the goal, which the observer praises: P(good) = 1.0 at σ = 0.03, +0.99 reward),
+forever. The proxy return of that cycle is +0.5 per step at praise ratio 1 (neural return
++50 per episode) against +1 once for reaching the goal; the true return is -1.0. Double
+Q: 0-3/20 stuck at every ratio and σ (its σ = 0.03 baseline anomaly, 14/20, disappears
+when praise is added). Our PPO: 10/10 stuck with or without praise. So praise does not
+rescue the blind spot; for the plain learner it hands it a better exploit.
+
+**2b. Does praise create surprise-seeking under the honest brain? No.** Honest brain,
+praise ratio 0.5, surprise weight 0 / 0.5 / 1, α 0.25 / 1 / 4, plain and Double Q, 20
+seeds each: every one of the 18 cells reaches the goal 20/20 by the safe route with true
+return 0.72, mean observer surprise 0.23 (the predictor's prior keeps a 28-step route at
+≈ 0.2 surprise), 0% unpredictable moves, action entropy 1.5 bits (the route's own mix),
+no extra steps, 0/20 rise-then-fall in every cell. The surprise bonus (at most 0.5 x
+praise amplitude x surprise) is always smaller than the error penalty an unpredictable
+move earns under an honest observer, so there is nothing to seek. The original
+"rise-then-fall" hypothesis is not supported here either.
+
+**2c. Combined (visibility + praise 0.5 + surprise).** Plain Q: 20/20 stuck at w = 0
+(praise farm), 16/20 at w = 1, α = 1, 20/20 at w = 1, α = 4. Double Q: 1/20 at w = 0,
+0/20 at w = 1, α = 1, but 9/20 stuck at w = 1, α = 4 (true return -0.05). The blind
+spot dominates: it turns praise into a farmable resource; surprise only matters for
+Double Q at the highest pressure.
+
+**Valence flip** (observer as competitor, honest brain, plain Q, 10 seeds): 10/10 safe
+route, true return 0.72; the praise term just changes sign (-0.11 per episode) and the
+error channel dominates. No effect.
+
+**Artifacts to flag.** The praise farm depends on (i) praise for *local* progress judged
+against the true cost-to-go and (ii) the retreat being unobserved; both are modelling
+choices, but both are the natural ones (observers respond to good moves; the blind spot
+is the premise of Part 1). The predictor's Laplace prior and half-life (PLACEHOLDER) set
+the surprise floor at 0.2; a sharper observer model would lower it but not change 2b's
+sign. All praise parameters are PLACEHOLDERs (see RELATED_WORK.md for what would ground
+them).

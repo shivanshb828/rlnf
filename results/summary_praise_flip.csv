@@ -1,0 +1,2 @@
+variant,n_seeds,k_frozen,k_goal,k_hazard_route,true_return,true_return_ci,neural_return,stuckness_late,goal_rate_late,mean_surprise,frac_unpredictable,action_entropy,praise_return,extra_steps
+plain,10,0,10,0,0.72,7.253457094217689e-17,-2.918390112186053,0.000455287785186815,1.0,0.23025536790839332,0.0,1.5,-0.10994697354599688,0.0
