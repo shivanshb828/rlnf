@@ -301,3 +301,35 @@ are its baseline under every mode).
 tax on unobserved steps; it removes the off-route and half-route failures and is
 harmful on the on-route layout. True imputation exists only on absent-supervisor, where
 it is the only fix that removes the shortcut. "Noise removal" on its own is not a fix.
+
+## Phase C: robustness of the headline claims (plain language)
+
+Tables `results/summary_qinit.csv`, `summary_double300k.csv`, `summary_realnoise20.csv`;
+figure `figures/review_qinit_sensitivity.png`. Visibility brain, α = 1, 20 seeds per cell.
+
+**q_init {-1, -0.5, 0} (100k steps, σ 0.3).**
+- Part 1 freeze, plain Q: 19 / 16 / 8 of 20 frozen (review: 19 / 16 / 8, reproduced).
+  Double Q: 0 / 1 / 0. The off-route freeze is real at every init but its size is a
+  function of the init; with an optimistic table it is a 40% effect, not a 95% one.
+- Praise farming (praise 0.5, σ 0.03 and 0.3), plain Q: 20 / 20 / 20 of 20 at every
+  init and both σ. Double Q: 0-1/20 everywhere. Survives the check unchanged.
+- Distract-then-err (k = 10), Double Q: 13 / 17 / 17 of 20 take the hidden shortcut,
+  every one after a wave; plain Q 0 / 0 / 5. Survives, and is stronger with optimistic
+  init.
+
+**300k steps.** Double Q at σ 0.03: 0/20 frozen (16/20 at 100k; review: 0/20), and
+with learning rate 0.2 at 100k: 9/20 (review: 9/20): the σ 0.03 anomaly is slow
+learning, not a trap, and is retired. Plain Q at σ 0.3: 17/20 frozen at 300k (review:
+17/20): the freeze is not under-training. Double Q everywhere it is cited, at 300k:
+main σ 0.1 / 0.3 / 0.5: 0 / 1 / 2 of 20 frozen; absent-supervisor shortcut 18/20 (not a
+fix there, as before); praise farm 1/20; distract-then-err 13/20 shortcut; real decoder
+outputs 2/20 frozen; on-route layout 12/20 fail (18/20 at 100k): longer training does
+not turn Double Q into a fix for lost guidance.
+
+**Real decoder output distributions, 20 seeds per subject** (`realnoise20`, 120 runs per
+cell). Visibility + plain Q: 20/20 frozen for every one of the six subjects (120/120).
+Visibility + Double Q: 0/20 for subjects 1-3 (80, 73, 81% balanced accuracy), 1/20, 5/20,
+2/20 for subjects 4-6 (58, 63, 53%): 8/120. Honest + plain Q: 0/20 for subjects 1-3,
+1/20 each for 4-6 (3/120); honest + Double Q 0, 0, 0, 2, 3, 1 (6/120). The condition is
+now labelled "real decoder output distributions (i.i.d. per step)" in the code and
+notes; it is not real noise dynamics.

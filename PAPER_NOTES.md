@@ -69,7 +69,23 @@ hazards only on the hidden top route) unless stated. Defaults and placeholders a
 
 ## Do not claim
 
-Results from v1-v3 and this round that are too weak, too artifact-prone, or both.
+Results from v1-v3 and the later rounds that are too weak, too artifact-prone, or both.
+
+- **"Double Q-learning fixes blind-spot freezing."** Only for *off-route* blind spots
+  (0/20 at σ 0.3 with q_init -1). With the route itself unobserved (on-route layout) Double
+  Q fails 18/20 at 100k steps; half-route 12/20 (σ 0.3). Say: Double Q removes the
+  off-route trap; it does nothing for lost guidance.
+- **"Imputation fixes freezing in the maze."** In the maze the imputed reward never
+  draws on its (cell, action) table (0% of unobserved steps), so it is the per-action
+  mean, i.e. a flat tax on unobserved steps; it is numerically identical to
+  "pessimistic" there, and on the on-route layout it pushes 20/20 seeds onto the
+  visible hazardous route. True imputation only operates on absent-supervisor.
+- **"Real EEG noise."** The real-ErrP condition samples held-out decoder outputs i.i.d.
+  per step; it reproduces real output *distributions*, not noise dynamics. Call it
+  "real decoder output distributions (i.i.d. per step)".
+- **"The honest brain shows the task is learnable."** The honest brain is an oracle
+  shaping signal (true cost-to-go); its success says nothing about learnability
+  without guidance (α = 0 with neutral Q-init: 0/20).
 
 - **Habituation as a cause of freezing (v1, v2).** v1's monotone-in-α PPO freeze was a reward-scale artifact (fixed by reward normalisation: honest α = 4 went from 3/10 to 9/10). v2's habituation ablation showed no dose-response because the leaky-exposure model has no floor: any decay saturates under a two-step oscillation. The habituation model itself (per-cell exposure, decay 0.8, τ = 500, dishabituation to 30%) is a stack of PLACEHOLDERs with no grounding. Say "habituation was modelled and did not change the conclusions", nothing more.
 - **"Optimising harder makes it worse" / rise-then-fall.** 0 seeds in every cell of every sweep (v2 main, v2.1, Part 2) except 1-2/20 late route switches in three uncentered v2 cells. The flawed signals fail from the first non-zero α.

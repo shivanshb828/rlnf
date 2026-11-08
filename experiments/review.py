@@ -57,7 +57,7 @@ def agg(runs: pd.DataFrame, keys: list[str]) -> pd.DataFrame:
     for k in ("imputed_from_table_frac", "waves", "frac_hazards_after_wave", "praise_return", "good_events", "n_hazard"):
         if k in r.columns:
             cols[k] = (k, "mean")
-    return r.groupby(keys).agg(**cols).reset_index()
+    return r.groupby(keys, dropna=False).agg(**cols).reset_index()
 
 
 # ---------------------------------------------------------------------------
