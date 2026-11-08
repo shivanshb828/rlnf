@@ -333,3 +333,37 @@ Visibility + Double Q: 0/20 for subjects 1-3 (80, 73, 81% balanced accuracy), 1/
 1/20 each for 4-6 (3/120); honest + Double Q 0, 0, 0, 2, 3, 1 (6/120). The condition is
 now labelled "real decoder output distributions (i.i.d. per step)" in the code and
 notes; it is not real noise dynamics.
+
+## Phase D: carry-overs (plain language)
+
+Tables `results/summary_praise_fixes.csv`, `summary_shaping.csv`,
+`summary_distractor_robust.csv`, `summary_deep_fixes.csv`. 20 seeds per cell (10 for
+the deep learners), visibility brain, σ 0.3, α = 1, q_init -1.
+
+**Fixes on praise farming (praise 0.5).** Tax: plain Q 20/20 reach the goal (baseline
+0/20), Double Q 20/20, true return 0.72. Imputed (= per-action tax here): 19/20 and
+20/20. Denoise: plain 0/20, Double Q 17/20 (its baseline 19/20). The farm's unobserved
+retreat step is priced by any constant penalty on unobserved steps; removing noise does
+nothing.
+
+**Broken-shaping test (Ng, Harada & Russell 1999).** Potential-based praise (signed,
+F = Φ(s') − Φ(s), Φ = −cost-to-go) vs progress-only praise, each with full visibility
+(honest) and with the blind spot. Full visibility: 20/20 safe route for both kinds and
+both learners, no farm. Blind spot: plain Q farms 20/20 with *both* kinds (Double Q
+1/20 each). Potential-based shaping is policy-invariant only when both its signs are
+delivered; the blind spot deletes the negative half (the retreat into the hidden cell),
+and what remains is a one-sided bonus the agent can farm. Praise farming is broken
+shaping, not a property of "progress-only" praise.
+
+**Distractor robustness (k = 10).** Wave cost 0.01 / 0.05 / 0.2 with the "distracted"
+bit observable: Double Q takes the hidden shortcut in 13 / 13 / 19 of 20 seeds (plain Q
+0 / 0 / 2, mostly frozen). With the bit *not* observable: 0 / 0 / 0 of 20 for Double Q
+and 0 / 0 / 2 for plain Q, 20/20 safe route. The exploit is insensitive to the wave's
+cost over a 20x range and entirely dependent on the agent being able to tell that the
+observer is distracted.
+
+**Fixes on the deep learners (10 seeds, off-route blind spot, σ 0.3).** Baseline: DQN
+0/10 reach the goal, Double DQN 5/10, our PPO 0/10. Tax: 10/10, 10/10, 9/10. Imputed
+(= per-action tax here): 10/10, 10/10, 8/10. The constant penalty on unobserved steps
+transfers to function approximation and to the policy-gradient learner on this layout
+(where the unobserved region is off the route; see Phase B for where it does harm).
