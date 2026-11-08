@@ -462,3 +462,183 @@ choice to revisit**, not a property of observers.
 | Q + habituation takes a habituated hazard route (2/5 at α = 4) | 0/20 at every α. Did not replicate on the equal-length layout. |
 | Honest brain never degrades with α | True for Q (20/20 at α = 4). For PPO, α = 4 fails 7/10 for reward-scale reasons. |
 | "Hiding" signature confounded with route length | With equal routes, hidden-half preference is driven by the flaw alone: ≈ 100% of late-training errors hidden under visibility/both for both learners (`hiding.png`). |
+
+## v2.1: is visibility-flaw freezing a trap or an optimum?
+
+Hypothesis under test: freezing is an exploration trap, not the optimum of the
+agent's reward. Noisy decoder penalties make the visible half look risky during
+learning while the hidden half is perfectly quiet, so the agent retreats before
+discovering that the safe route pays. Four checks: exact optimal policies by
+value iteration, a decoder-noise dose-response, learner-hyperparameter
+sensitivity, and PPO with reward normalisation.
+
+Scripts: `experiments/optimal_policy.py` (value iteration),
+`experiments/sweep.py --experiment noise explore ppo_norm`,
+`experiments/freeze.py` (tables + figures). Outputs: `results/optimal_policy.csv`,
+`results/optimal_policy_by_seed.csv`, `results/decoder_accuracy.csv`,
+`results/summary_{noise,explore,ppo_norm}.csv`,
+`results/noise_dose_response.png`, `results/learner_sensitivity.png`.
+
+### 1. Optimal-policy check (value iteration on the agent's expected reward)
+
+The agent's reward is `goal - step_penalty + α · E_noise[-(P(error) - baseline)]`;
+the only randomness is decoder noise, integrated by Gauss-Hermite quadrature
+with the fitted decoder (seed 0), γ = 0.99 as in the learners. Habituation makes
+the reward history-dependent (per-(kind, cell) leaky exposure counters: ~360
+continuous state variables), so the habituation conditions are *bracketed* by
+holding the observer at a fixed factor: 1 (fresh), 0.11 (the trough of the
+habituation curve, the most habituated the model allows), and 0 (no ErrP for
+any error). The safe route makes no errors, so its value is the same at every
+bracket, and every other policy's value is monotone in the factor; if the
+optimal policy agrees across brackets it is optimal under any habituation
+history.
+
+Optimal policy from the start state, with values of the optimal policy, the
+safe route, and the freezing policy Q-learning seed 0 learned (up 3 cells, then
+press LEFT into the border forever):
+
+| condition | reward | α | optimal policy | V\* | V(safe) | V(freeze) |
+|---|---|---|---|---|---|---|
+| honest | centered | 0.25 / 1 / 4 | safe route | 0.55 / 0.64 / 1.03 | same | -21 / -81 / -322 |
+| honest | uncentered | 0.25 / 1 / 4 | safe route | 0.03 / -1.45 / -7.36 | same | -23 / -90 / -356 |
+| visibility | centered | 0.25 / 1 | **safe and hazard routes tie** | 0.55 / 0.64 | same | -0.87 / -0.48 |
+| visibility | centered | 4 | **never finish (frozen)** | 1.08 | 1.03 | 1.08 |
+| visibility | uncentered | 0.25 / 1 / 4 | safe and hazard routes tie | 0.03 / -1.45 / -7.36 | same | -3.0 / -9.0 / -33 |
+| habituation | both, factor 1 and 0.11 | all | safe route | as honest | same | ≥ -53 |
+| habituation | both, factor 0 | all | tie (as visibility) | as visibility | same | as visibility |
+| both | centered | 0.25 / 1 | tie | as visibility | same | as visibility |
+| both | centered | 4 | never finish (frozen) | 1.08 | 1.03 | 1.08 |
+
+- **At α = 0.25 and α = 1 freezing is never optimal**, in any condition: its
+  value is 1 to 80 units below the safe route's. Q-learning froze in 19/20
+  seeds there. **Trap.**
+- **Under the visibility flaw the safe and hazard routes tie exactly** (hidden
+  errors cost nothing and both routes are 28 steps). Nothing in the agent's
+  reward prefers the safe route; honest feedback does.
+- **At α = 4 with centering, "live in the hidden half forever" is the true
+  optimum for the seed-0 decoder.** The reason is a baseline estimation error:
+  `p_clean` is the mean of ~3,500 calibration samples, so it carries sampling
+  error δ (seed 0: +0.005). A hidden wall bump then earns -0.01 + α·δ per step
+  *forever*, i.e. (−0.01 + αδ)/(1 − γ) = −1 + 100·α·δ, which exceeds the safe
+  route's ≈ 1.03 once δ > 0.005 at α = 4. Across 20 decoder seeds δ has mean
+  +0.0005 and sd 0.006, and **freezing is the optimum in 5/20 decoder seeds at
+  α = 4, 0/20 at α = 1, 0/20 at α = 0.25**. The habituation bracket at factor 0
+  and the both-flaws condition inherit the same result.
+- **Honest brain: the safe route is optimal everywhere**, and freezing is
+  catastrophic (every bump is perceived). Habituation at any reachable factor
+  (≥ 0.11) does not change that: PPO's 10/10 habituation freeze is a trap.
+
+So the answer to "optimal or trap" is: a trap at α ≤ 1 (19/20 seeds froze where
+0/20 should), and at α = 4 a mixture, with a quarter of decoder seeds making
+immortality in the hidden half genuinely optimal. The latter is a property of
+centering with a finite calibration set and a 100-step effective horizon, which
+amplifies a 0.5% baseline error into more than the goal is worth. **Any
+centered reward whose clean-step mean is not exactly zero makes "never
+terminate" optimal for large enough α·horizon.** A time cost the agent cannot
+avoid (or a terminal bonus that dominates α·δ/(1−γ)) removes this.
+
+### 2. Decoder-noise dose-response (Q-learning, centered, 20 seeds per point)
+
+Decoder quality at each noise level, scored on held-out honest data (5 decoder
+seeds; the calibration and test sets both have 30% errors):
+
+| noise σ | 0.03 | 0.1 | 0.2 | 0.3 (default) | 0.5 | 0.8 |
+|---|---|---|---|---|---|---|
+| balanced accuracy | 100% | 99.9% | 96.0% | 90.2% | 78.0% | 65.9% |
+| F1 | 1.00 | 1.00 | 0.95 | 0.87 | 0.70 | 0.50 |
+| p_clean (false-positive tax) | 0.000 | 0.001 | 0.032 | 0.084 | 0.175 | 0.241 |
+
+Real single-trial ErrP decoders are reported at roughly 65-80% accuracy
+(approximate; the band is shaded in `noise_dose_response.png`), i.e. σ ≈ 0.5-0.8
+here. The v2 default σ = 0.3 (90%) is optimistic.
+
+Seeds frozen (of 20), eval stuckness > 0.3:
+
+| condition | α | σ=0.03 | 0.1 | 0.2 | 0.3 | 0.5 | 0.8 |
+|---|---|---|---|---|---|---|---|
+| honest | 0.25 | 0 | 0 | 0 | 0 | 0 | 0 |
+| honest | 1 | 0 | 0 | 0 | 0 | 0 | 1 |
+| honest | 4 | 0 | 0 | 0 | 0 | 0 | 2 |
+| visibility | 0.25 | 0 | 3 | 20 | 19 | 20 | 20 |
+| visibility | 1 | 0 | 3 | 20 | 19 | 19 | 19 |
+| visibility | 4 | 1 | 3 | 20 | 19 | 20 | 20 |
+
+- **Freeze rate rises with decoder noise only under the visibility flaw.** The
+  honest brain stays at 0/20 up to 78% accuracy and reaches 1-2/20 only at 66%.
+- **The visibility response is a step, not a slope**: 0/20 at σ = 0.03, 3/20 at
+  σ = 0.1 (99.9% accuracy!), 19-20/20 from σ = 0.2 (96%) onward, flat through
+  the realistic band. α makes no difference (0.25, 1, and 4 are identical
+  within one seed). The threshold sits at a decoder far better than any real
+  one.
+- **At realistic decoder accuracy (66-78%), 19-20/20 visibility-flaw seeds
+  freeze and 0-2/20 honest seeds do.**
+
+### 3. Learner sensitivity (visibility, α = 1, σ = 0.3, centered, Q-learning, 20 seeds per cell)
+
+Seeds frozen / seeds reaching the goal:
+
+| learning rate | low exploration (ε → 0.01 over 25%) | default (ε → 0.05 over 50%) | high (ε → 0.3 over 90%) |
+|---|---|---|---|
+| 0.02 | 14 / 6 | 18 / 2 | 20 / 0 |
+| 0.1 (default) | 13 / 7 | 19 / 1 | 20 / 0 |
+| 0.3 | **10 / 10** | 20 / 0 | 20 / 0 |
+
+- **More exploration does not rescue the agent; it makes freezing worse**
+  (20/20 at every learning rate with the high schedule; late-training goal
+  rate 0.00 even with ε = 0.3 random actions still active).
+- **Less exploration and a higher learning rate help**: 10/20 reach the goal
+  with lr 0.3 and the fast-decaying ε.
+- This refines the trap hypothesis. Freezing is not the optimum (section 1),
+  but it is not an exploration *shortage* either. Exploration is what
+  generates the asymmetry: random actions in the visible half produce
+  penalised errors that drag that half's values down, while the same random
+  actions in the hidden half cost nothing. The longer the agent explores, the
+  more it learns that the visible half hurts. A learner that commits early to
+  the "away"-shaped gradient toward the goal escapes half the time.
+
+### 4. PPO with reward normalisation (VecNormalize, 10 seeds per cell)
+
+| condition | α | without normalisation (v2 main sweep) | with normalisation |
+|---|---|---|---|
+| honest | 1 | 10/10 reach goal, 0 frozen | 9/10 reach goal, 1 frozen |
+| honest | 4 | 3/10 reach goal, 7 frozen | **9/10 reach goal, 1 frozen** |
+| visibility | 1 | 0/10, 10 frozen | 0/10, 10 frozen |
+| visibility | 4 | 0/10, 10 frozen | 0/10, 10 frozen |
+
+Confirmed: honest α = 4 was a reward-scale artifact (3/10 → 9/10 with
+normalisation). The visibility freeze is unchanged (10/10 at both α).
+`ppo_normalize_reward = True` is now the default.
+
+### Answers
+
+**(a) Is freezing optimal under the agent's reward, or a trap?** A trap at α ≤ 1
+in every condition (value iteration: freezing is worth 1-80 units less than
+the safe route, yet 19/20 Q-learning seeds and 10/10 PPO seeds froze). At
+α = 4 with the centered reward it is genuinely optimal in 5/20 decoder seeds,
+through a mechanism that is an artifact of centering: a sampling error of
+≈ +0.005 in the estimated clean-step baseline, multiplied by α and by the
+100-step discounted horizon, makes "never terminate in the hidden half" worth
+more than the goal. The trap is not an exploration shortage: more exploration
+makes it worse (section 3), because exploration is what teaches the agent
+that the visible half is penalised and the hidden half is not.
+
+**(b) Does freeze rate rise with decoder noise only under the visibility flaw?**
+Yes. Honest: 0/20 up to 78% balanced accuracy, 1-2/20 at 66%. Visibility: a
+step from 0/20 (100%) through 3/20 (99.9%) to 19-20/20 at 96% and below, the
+same at α = 0.25, 1, and 4.
+
+**(c) At realistic decoder accuracy (≈ 65-80%), how often do agents freeze?**
+Visibility flaw: 19-20/20 Q-learning seeds at every α tested, and 10/10 PPO
+seeds at α = 1 and 4 (σ = 0.3; not re-run at higher noise). Honest brain:
+0/20 at 78%, 1-2/20 at 66% (Q-learning); 1/10 PPO with normalisation.
+
+### Caveats specific to v2.1
+
+- The "frozen" label uses the deterministic eval policy; for Q-learning the
+  α = 0 random-walk baseline scores 0.07, so > 0.3 is unambiguous, but the
+  late-training (ε-greedy) stuckness is also reported in the summary CSVs.
+- The value-iteration results use the seed-0 decoder except where stated; the
+  per-seed table covers the visibility/centered case only.
+- The noise sweep holds the calibration error rate (30%) fixed; at σ = 0.8 the
+  decoder's p_clean is 0.24, so the uncentered tax would be large there.
+- PPO normalisation was tested only at σ = 0.3.

@@ -1,15 +1,19 @@
-"""v2 sweeps, run in parallel. Writes three tidy CSVs per experiment into results/.
+"""Sweeps, run in parallel. Each experiment writes three tidy CSVs into results/.
 
-    python experiments/sweep.py --smoke                       # a few short runs
-    python experiments/sweep.py --estimate                    # time one full job per learner
-    python experiments/sweep.py --experiment main --learner q # etc.
+    python experiments/sweep.py --experiment main --learner q      # v2 main sweep
+    python experiments/sweep.py --experiment noise                  # v2.1 decoder-noise dose-response
+    python experiments/sweep.py --smoke --experiment noise          # a handful of short runs
+    python experiments/sweep.py --estimate --experiment ppo_norm    # time one job and print the ETA
 
-Experiments
-  main      alpha x brain condition x {centered, uncentered}; Q: 20 seeds, PPO: alpha {0,1,4}, 10 seeds, centered only
-  ablation  habituation brain only; habituation_decay x habituation_tau x alpha {1, 4}; Q: 20 seeds, PPO: 5 seeds
+Experiments (seed counts in SEEDS)
+  main      alpha x brain condition x {centered, uncentered}; PPO on alpha {0,1,4}, centered, no reward norm
+  ablation  habituation brain; habituation_decay x habituation_tau x alpha {1, 4}
+  noise     Q, centered: noise_sigma x {honest, visibility} x alpha {0.25, 1, 4}
+  explore   Q, visibility, alpha 1, sigma 0.3: learning rate x exploration schedule
+  ppo_norm  PPO with VecNormalize reward scaling: {honest, visibility} x alpha {1, 4}
 
 Outputs (prefix = experiment name)
-  <prefix>_runs.csv         one row per run: greedy-eval means + late-training error-location fractions
+  <prefix>_runs.csv         one row per run: greedy-eval means + late-training aggregates + the run's tags
   <prefix>_checkpoints.csv  one row per checkpoint: greedy-eval means + KL from the 10% policy
   <prefix>_curves.csv       one row per run per 5k-step bin: training-episode means
 """
@@ -32,33 +36,57 @@ from rlnf.train import run  # noqa: E402
 
 RESULTS = Path(__file__).resolve().parents[1] / "results"
 ALPHAS = [0.0, 0.25, 0.5, 1.0, 2.0, 4.0]
-PPO_ALPHAS = [0.0, 1.0, 4.0]
 DECAYS = [0.9, 0.8, 0.6]           # habituation strength: weak -> strong
 TAUS = [100.0, 500.0, 2500.0]      # recovery time constant in env steps: fast -> slow
-SEEDS = {"q": 20, "ppo": 10}
-ABLATION_SEEDS = {"q": 20, "ppo": 5}
+SIGMAS = [0.03, 0.1, 0.2, 0.3, 0.5, 0.8]
+LEARNING_RATES = [0.02, 0.1, 0.3]
+EXPLORATION = {"low": dict(q_eps_end=0.01, q_eps_fraction=0.25),      # epsilon 1 -> 0.01 over the first quarter
+               "default": dict(q_eps_end=0.05, q_eps_fraction=0.5),
+               "high": dict(q_eps_end=0.3, q_eps_fraction=0.9)}       # epsilon 1 -> 0.3 over 90% of training
+SEEDS = {("main", "q"): 20, ("main", "ppo"): 10, ("ablation", "q"): 20, ("ablation", "ppo"): 5,
+         ("noise", "q"): 20, ("explore", "q"): 20, ("ppo_norm", "ppo"): 10}
 BIN = 5_000
-KEYS = ["learner", "condition", "alpha", "seed", "centered", "habituation_decay", "habituation_tau"]
 TRAIN_METRICS = ["true_return", "neural_return", "agent_return", "reached_goal", "steps", "n_errors",
                  "errors_in_fov", "errors_out_fov", "repeated_errors", "first_time_errors",
                  "n_hazard", "n_wall", "n_away", "mean_hab_factor", "stuckness", "repeat_frac"]
 
 
-def jobs_for(experiment: str, learner: str, smoke: bool) -> list[dict]:
+def job(learner, condition, alpha, seed, train=None, brain=None, **tags) -> dict:
+    """A job = run() arguments + config overrides + tag columns copied into the output rows."""
+    return dict(learner=learner, condition=condition, alpha=alpha, seed=seed,
+                train=train or {}, brain=brain or {}, tags=tags)
+
+
+def jobs_for(experiment: str, learner: str) -> list[dict]:
+    n = SEEDS.get((experiment, learner), 0)
+    seeds = range(n)
     if experiment == "main":
-        alphas = ALPHAS if learner == "q" else PPO_ALPHAS
-        centered = [True, False] if learner == "q" else [True]
-        seeds = range(SEEDS[learner])
-        grid = [dict(alpha=a, condition=c, centered=ce, seed=s)
+        alphas, centered = (ALPHAS, [True, False]) if learner == "q" else ([0.0, 1.0, 4.0], [True])
+        return [job(learner, c, a, s, train=dict(centered=ce, ppo_normalize_reward=False))
                 for a, c, ce, s in itertools.product(alphas, CONDITIONS, centered, seeds)]
-    else:
-        grid = [dict(alpha=a, condition="habituation", centered=True, seed=s, habituation_decay=d, habituation_tau=t)
-                for d, t, a, s in itertools.product(DECAYS, TAUS, [1.0, 4.0], range(ABLATION_SEEDS[learner]))]
-    if smoke:
-        grid = [g for g in grid if g["seed"] == 0 and g["alpha"] in (0.0, 4.0)
-                and g["condition"] in ("honest", "habituation")
-                and g.get("habituation_decay", 0.6) == 0.6 and g.get("habituation_tau", 500.0) == 500.0]
-    return [dict(learner=learner, **g) for g in grid]
+    if experiment == "ablation":
+        return [job(learner, "habituation", a, s, train=dict(ppo_normalize_reward=False),
+                    brain=dict(habituation_decay=d, habituation_tau=t))
+                for d, t, a, s in itertools.product(DECAYS, TAUS, [1.0, 4.0], seeds)]
+    if experiment == "noise":
+        return [job(learner, c, a, s, brain=dict(noise_sigma=sig), noise_sigma=sig)
+                for sig, c, a, s in itertools.product(SIGMAS, ["honest", "visibility"], [0.25, 1.0, 4.0], seeds)]
+    if experiment == "explore":
+        return [job(learner, "visibility", 1.0, s, train=dict(q_lr=lr, **EXPLORATION[name]),
+                    q_lr=lr, exploration=name, **EXPLORATION[name])
+                for lr, name, s in itertools.product(LEARNING_RATES, EXPLORATION, seeds)]
+    if experiment == "ppo_norm":
+        return [job(learner, c, a, s, train=dict(ppo_normalize_reward=True), ppo_normalize_reward=True)
+                for c, a, s in itertools.product(["honest", "visibility"], [1.0, 4.0], seeds)]
+    raise ValueError(experiment)
+
+
+def smoke_subset(jobs: list[dict]) -> list[dict]:
+    """Seed 0 only, extreme alphas only, at most 8 jobs."""
+    picked = [j for j in jobs if j["seed"] == 0]
+    alphas = sorted({j["alpha"] for j in picked})
+    picked = [j for j in picked if j["alpha"] in (alphas[0], alphas[-1])]
+    return picked[:: max(1, len(picked) // 8)][:8]
 
 
 def _init_worker():
@@ -68,18 +96,16 @@ def _init_worker():
 
 
 def _job(args):
-    job, total_steps = args
-    train_cfg = TrainConfig(total_steps=total_steps, centered=job["centered"])
-    brain_cfg = BrainConfig()
-    if "habituation_decay" in job:
-        brain_cfg = replace(brain_cfg, habituation_decay=job["habituation_decay"], habituation_tau=job["habituation_tau"])
-    df = run(job["alpha"], job["condition"], job["seed"], job["learner"], train_cfg=train_cfg, brain_cfg=brain_cfg)
-    return summarize(df)
+    j, total_steps = args
+    train_cfg = replace(TrainConfig(total_steps=total_steps), **j["train"])
+    brain_cfg = replace(BrainConfig(), **j["brain"])
+    df = run(j["alpha"], j["condition"], j["seed"], j["learner"], train_cfg=train_cfg, brain_cfg=brain_cfg)
+    return summarize(df, j["tags"])
 
 
-def summarize(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
+def summarize(df: pd.DataFrame, tags: dict) -> dict[str, pd.DataFrame]:
     """Collapse one run's episode log into the three output tables."""
-    ids = df.iloc[0][KEYS].to_dict()
+    ids = {**df.iloc[0][["learner", "condition", "alpha", "seed", "centered", "habituation_decay", "habituation_tau"]].to_dict(), **tags}
     tr, ck, ev = (df[df.phase == p] for p in ("train", "checkpoint", "eval"))
     late = tr[tr.step > 0.8 * tr.step.max()]
     runs = {**ids, **{k: ev[k].mean() for k in TRAIN_METRICS},
@@ -95,7 +121,8 @@ def summarize(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--experiment", choices=["main", "ablation", "both"], default="both")
+    ap.add_argument("--experiment", choices=["main", "ablation", "noise", "explore", "ppo_norm"], nargs="+",
+                    default=["main", "ablation"])
     ap.add_argument("--learner", choices=["q", "ppo", "both"], default="both")
     ap.add_argument("--smoke", action="store_true")
     ap.add_argument("--estimate", action="store_true")
@@ -103,22 +130,22 @@ def main():
     ap.add_argument("--total-steps", type=int, default=TrainConfig.total_steps)
     args = ap.parse_args()
     learners = ["q", "ppo"] if args.learner == "both" else [args.learner]
-    experiments = ["main", "ablation"] if args.experiment == "both" else [args.experiment]
-
-    if args.estimate:
-        for learner in learners:
-            t0 = time.time()
-            _job((dict(learner=learner, alpha=1.0, condition="honest", centered=True, seed=0), args.total_steps))
-            per = time.time() - t0
-            for exp in experiments:
-                n = len(jobs_for(exp, learner, False))
-                print(f"{learner:3s} {exp:8s}: {n:4d} jobs x {per:.1f}s / {args.workers} workers ~ {n * per / args.workers / 60:.1f} min (uncontended)")
-        return
-
     RESULTS.mkdir(exist_ok=True)
-    for exp in experiments:
-        jobs = [j for l in learners for j in jobs_for(exp, l, args.smoke)]
+
+    for exp in args.experiment:
+        jobs = [j for l in learners for j in jobs_for(exp, l)]
+        if not jobs:
+            print(f"[{exp}] no jobs for learner(s) {learners}")
+            continue
+        if args.estimate:
+            t0 = time.time()
+            _job((jobs[0], args.total_steps))
+            per = time.time() - t0
+            print(f"[{exp}] {len(jobs)} jobs x {per:.1f}s / {args.workers} workers ~ {len(jobs) * per / args.workers / 60:.1f} min uncontended")
+            continue
         steps = min(args.total_steps, 20_000) if args.smoke else args.total_steps
+        if args.smoke:
+            jobs = smoke_subset(jobs)
         prefix = f"smoke_{exp}" if args.smoke else exp
         print(f"[{exp}] {len(jobs)} jobs, {steps} steps each, {args.workers} workers", flush=True)
         t0 = time.time()
@@ -128,15 +155,13 @@ def main():
                 for k in parts:
                     parts[k].append(out[k])
                 r = out["runs"].iloc[0]
-                print(f"[{exp} {i:4d}/{len(jobs)}] {r.learner:3s} {r.condition:11s} a={r.alpha:<4} c={int(r.centered)} "
-                      f"d={r.habituation_decay} tau={r.habituation_tau:<6} seed={r.seed:<2} "
+                print(f"[{exp} {i:4d}/{len(jobs)}] {r.learner:3s} {r.condition:11s} a={r.alpha:<4} seed={r.seed:<2} "
                       f"true={r.true_return:+.2f} goal={r.reached_goal:.2f} stuck={r.stuckness:.2f} ({time.time() - t0:.0f}s)", flush=True)
         for k, frames in parts.items():
             out = RESULTS / f"{prefix}_{k}.csv"
-            if (args.learner != "both" or args.smoke) and out.exists() and not args.smoke:
-                old = pd.read_csv(out)
-                old = old[~old.learner.isin(learners)]
-                frames = [old] + frames
+            if out.exists() and not args.smoke and args.learner != "both":
+                old = pd.read_csv(out)              # keep the other learner's rows
+                frames = [old[~old.learner.isin(learners)]] + frames
             pd.concat(frames, ignore_index=True).to_csv(out, index=False)
         print(f"[{exp}] wrote {prefix}_{{runs,checkpoints,curves}}.csv in {time.time() - t0:.0f}s", flush=True)
 

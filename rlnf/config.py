@@ -120,4 +120,7 @@ class TrainConfig:
     ppo_batch_size: int = 64
     ppo_n_epochs: int = 10
     ppo_lr: float = 3e-4
-    ppo_ent_coef: float = 0.01
+    ppo_ent_coef: float = 0.05
+    # VecNormalize(norm_reward=True): rescales rewards by the running std of discounted returns.
+    # The v2 main/ablation PPO sweeps ran with False (see README); default True from v2.1 on.
+    ppo_normalize_reward: bool = True

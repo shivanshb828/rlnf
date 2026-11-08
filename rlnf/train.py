@@ -196,8 +196,12 @@ def train_ppo(env: NeuralRewardWrapper, cfg: TrainConfig, seed: int) -> list[dic
     import torch
     from stable_baselines3 import PPO
     from stable_baselines3.common.callbacks import BaseCallback
+    from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
     torch.set_num_threads(1)
+    vec_env = DummyVecEnv([lambda: env])
+    if cfg.ppo_normalize_reward:
+        vec_env = VecNormalize(vec_env, norm_obs=False, norm_reward=True, gamma=cfg.gamma)
     n_states = env.observation_space.shape[0]
     ref_step = int(cfg.ref_fraction * cfg.total_steps)
 
@@ -236,7 +240,7 @@ def train_ppo(env: NeuralRewardWrapper, cfg: TrainConfig, seed: int) -> list[dic
             return True
 
     model = PPO(
-        "MlpPolicy", env, n_steps=cfg.ppo_n_steps, batch_size=cfg.ppo_batch_size,
+        "MlpPolicy", vec_env, n_steps=cfg.ppo_n_steps, batch_size=cfg.ppo_batch_size,
         n_epochs=cfg.ppo_n_epochs, learning_rate=cfg.ppo_lr, ent_coef=cfg.ppo_ent_coef,
         gamma=cfg.gamma, seed=seed, verbose=0, device="cpu",
     )
