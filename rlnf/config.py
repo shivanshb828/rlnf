@@ -9,32 +9,48 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 # Grid layout. S = start, G = goal, # = wall, H = hazard, . = open floor.
-# Row 1 holds start and goal. The short route (10 steps) runs along row 0 and
-# must cross the hazard at (0, 4). The safe route (20 steps) runs along row 7.
+# v2: a 15x15 maze whose bottom half is the mirror image of its top half, so
+# the route over the top and the route under the bottom are both exactly
+# 28 steps. Only the top route has hazards (cells (0,4) and (0,10), which it
+# must cross). Each half also contains a serpentine of dead ends hanging off
+# the hazard columns, so a random walk gets lost.
 LAYOUT = """\
-....H....
-S.#####.G
-..#####..
-..#####..
-..#####..
-..#####..
-..#####..
-.........
-.........
+....H.....H....
+.###.#####.###.
+.#...#...#...#.
+.#.#.#.#.#.#.#.
+.#.#.#.#.#.#.#.
+.#.#...#...#.#.
+.#.#########.#.
+S#############G
+.#.#########.#.
+.#.#...#...#.#.
+.#.#.#.#.#.#.#.
+.#.#.#.#.#.#.#.
+.#...#...#...#.
+.###.#####.###.
+...............
 """
 
 # Observer field of view: 1 = the observer sees this cell, 0 = does not.
-# Rows 0-1 (the short, hazardous route, start and goal) are hidden; rows 2-8 are visible.
+# The bottom half (rows 7-14, including start and goal) is visible; the top
+# half, which holds the hazardous route, is hidden.
 FOV = """\
-000000000
-000000000
-111111111
-111111111
-111111111
-111111111
-111111111
-111111111
-111111111
+000000000000000
+000000000000000
+000000000000000
+000000000000000
+000000000000000
+000000000000000
+000000000000000
+111111111111111
+111111111111111
+111111111111111
+111111111111111
+111111111111111
+111111111111111
+111111111111111
+111111111111111
 """
 
 
@@ -58,6 +74,11 @@ class BrainConfig:
     noise_sigma: float = 0.3          # PLACEHOLDER: single-trial noise std (same units)
     habituation_decay: float = 0.8    # PLACEHOLDER: factor = decay ** exposure
     habituation_tau: float = 500.0    # PLACEHOLDER: env steps for exposure to recover by 1/e
+    # Dishabituation: after `onset` remembered exposures the response partially
+    # recovers, ramping linearly over `width` further exposures to `level`.
+    dishabituation_level: float = 0.3   # PLACEHOLDER: fraction of base amplitude recovered
+    dishabituation_onset: float = 10.0  # PLACEHOLDER: exposures before recovery starts
+    dishabituation_width: float = 10.0  # PLACEHOLDER: exposures over which it ramps up
     decoder_error_rate: float = 0.3   # PLACEHOLDER: fraction of error trials in the calibration set
     visibility_flaw: bool = False     # True: errors outside the FOV evoke no ErrP
     habituation_flaw: bool = False    # True: repeated errors evoke smaller ErrPs
@@ -79,9 +100,18 @@ class TrainConfig:
     total_steps: int = 100_000    # env steps of training per run
     gamma: float = 0.99           # discount; the only thing that favours short paths
     eval_episodes: int = 20       # greedy episodes after training
+    centered: bool = True         # neural reward = -(P(error) - p_clean); False = raw -P(error)
+    checkpoint_every: int = 5_000 # steps between policy checkpoints (greedy eval + KL)
+    checkpoint_episodes: int = 5  # greedy episodes per checkpoint, on a copy of the env/brain
+    ref_fraction: float = 0.1     # checkpoint at this fraction of training is the KL reference
+    kl_temperature: float = 0.1   # softmax temperature turning Q-values into a policy for KL
     decoder_samples: int = 5_000  # honest-brain random-policy steps used to fit the decoder
     # Tabular Q-learning
     q_lr: float = 0.1
+    # Initial Q-value. -1.0 = -step_penalty / (1 - gamma), the return of a policy that
+    # never reaches the goal. With 0.0 the step cost acts as an exploration bonus and
+    # tabular Q-learning solves the maze at alpha = 0 in 20/20 seeds (see README).
+    q_init: float = -1.0
     q_eps_start: float = 1.0
     q_eps_end: float = 0.05
     q_eps_fraction: float = 0.5   # fraction of training over which epsilon decays linearly

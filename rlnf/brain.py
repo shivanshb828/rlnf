@@ -51,8 +51,17 @@ class Brain:
         return self._exposure[key] * math.exp(-dt / self.cfg.habituation_tau)
 
     def habituation_factor(self, kind: str, cell: tuple[int, int]) -> float:
-        """Amplitude multiplier: decay ** exposure. 1.0 for a novel error."""
-        return self.cfg.habituation_decay ** self.exposure(kind, cell)
+        """Amplitude multiplier for this (kind, cell) error; 1.0 for a novel error.
+
+        Habituation: decay ** exposure. Dishabituation: after `onset` remembered
+        exposures the response partially recovers, ramping linearly over
+        `width` further exposures up to `level` of the base amplitude.
+        """
+        c = self.cfg
+        e = self.exposure(kind, cell)
+        habituated = c.habituation_decay ** e
+        recovered = c.dishabituation_level * min(1.0, max(0.0, (e - c.dishabituation_onset) / c.dishabituation_width))
+        return min(1.0, habituated + recovered)
 
     def _register(self, kind: str, cell: tuple[int, int]) -> None:
         key = (kind, cell)
@@ -85,10 +94,14 @@ class Brain:
 
 
 class Decoder:
-    """P(error | amplitude) = sigmoid(w * amplitude + b). Fixed after fitting."""
+    """P(error | amplitude) = sigmoid(w * amplitude + b). Fixed after fitting.
 
-    def __init__(self, w: float, b: float):
-        self.w, self.b = float(w), float(b)
+    ``p_clean`` is the decoder's mean P(error) on clean (no-error) calibration
+    steps: the false-positive "tax" that a centered neural reward subtracts.
+    """
+
+    def __init__(self, w: float, b: float, p_clean: float = 0.0):
+        self.w, self.b, self.p_clean = float(w), float(b), float(p_clean)
 
     def predict_proba(self, amplitude):
         z = self.w * np.asarray(amplitude, dtype=float) + self.b
@@ -109,7 +122,9 @@ class Decoder:
             theta -= step
             if np.abs(step).max() < 1e-8:
                 break
-        return cls(theta[0], theta[1])
+        dec = cls(theta[0], theta[1])
+        dec.p_clean = float(dec.predict_proba(x[y == 0]).mean())
+        return dec
 
 
 def honest(cfg: BrainConfig) -> BrainConfig:

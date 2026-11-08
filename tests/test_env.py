@@ -33,81 +33,76 @@ def env():
 
 
 def test_layout_parses(env):
-    assert env.start == (1, 0)
-    assert env.goal == (1, 8)
-    assert env.hazards.sum() == 1 and env.hazards[0, 4]
-    assert env.walls.sum() == 30
-    assert env.height == env.width == 9
+    assert env.start == (7, 0)
+    assert env.goal == (7, 14)
+    assert env.hazards.sum() == 2 and env.hazards[0, 4] and env.hazards[0, 10]
+    assert env.height == env.width == 15
+    # Bottom half mirrors the top half (hazards aside).
+    assert np.array_equal(env.walls[:7], env.walls[8:][::-1])
 
 
-def test_short_route_is_hazardous_and_hidden(env):
-    """A shortest path ignoring hazards is shorter, crosses a hazard, and is out of FOV."""
+def test_two_routes_of_equal_length(env):
+    """Shortest path ignoring hazards (top) and avoiding them (bottom) are both 28 steps."""
     plain = cost_to_go(env.walls, env.hazards, env.goal, hazard_weight=0.0)
-    ret, path, _ = greedy_rollout(env, plain)
-    assert len(path) - 1 == 10
-    assert any(env.hazards[p] for p in path)
-    assert not any(env.fov[p] for p in path)
-    assert ret == pytest.approx(1.0 - 0.5 - 10 * 0.01)
+    assert plain[env.start] == 28
+    assert env.cost_to_go[env.start] == 28
+    # Top route: forced through the hazard columns, entirely hidden.
+    top = cost_to_go(env.walls | (np.arange(15)[:, None] > 7), env.hazards, env.goal, hazard_weight=0.0)
+    assert top[env.start] == 28
+    ret, path, _ = greedy_rollout(env, top)
+    assert sum(env.hazards[p] for p in path) == 2
+    assert np.mean([env.fov[p] for p in path]) < 0.1
+    assert ret == pytest.approx(1.0 - 2 * 0.5 - 28 * 0.01)
 
 
-def test_safe_route_is_long_and_visible(env):
-    """The true-optimal path avoids hazards, is 20 steps, and is mostly in FOV."""
+def test_safe_route_is_visible_and_error_free(env):
     ret, path, infos = greedy_rollout(env, env.cost_to_go)
-    assert len(path) - 1 == 20
+    assert len(path) - 1 == 28
     assert not any(env.hazards[p] for p in path)
-    assert np.mean([env.fov[p] for p in path]) >= 0.75
-    assert ret == pytest.approx(1.0 - 20 * 0.01)
-    assert all(info["errors"] == [] for info in infos)  # optimal play produces no errors
+    assert all(env.fov[p] for p in path)
+    assert ret == pytest.approx(1.0 - 28 * 0.01)
+    assert all(info["errors"] == [] for info in infos)
 
 
 def test_wall_bump_is_an_error_and_does_not_move(env):
     env.reset()
     _, r, term, trunc, info = env.step(LEFT)  # off the grid border
-    assert env.pos == (1, 0)
+    assert env.pos == (7, 0)
     assert [e.kind for e in info["errors"]] == ["wall"]
-    assert info["errors"][0].in_fov is False
+    assert info["errors"][0].in_fov is True
     assert r == pytest.approx(-0.01)
-    env.reset()
-    env.step(RIGHT)
-    _, _, _, _, info = env.step(RIGHT)  # into the wall block at (1, 2)
-    assert env.pos == (1, 1)
+    _, _, _, _, info = env.step(RIGHT)  # into the wall at (7, 1)
+    assert env.pos == (7, 0)
     assert [e.kind for e in info["errors"]] == ["wall"]
 
 
 def test_moving_away_is_an_error(env):
     env.reset()
-    _, _, _, _, info = env.step(UP)  # (0,0) is further from the goal than (1,0)
+    _, _, _, _, info = env.step(UP)  # toward the hazardous top: cost-to-go rises
     assert [e.kind for e in info["errors"]] == ["away"]
+    assert info["errors"][0].in_fov is False
     _, _, _, _, info = env.step(DOWN)  # back on track: no error
     assert info["errors"] == []
 
 
 def test_hazard_entry_penalty_and_event(env):
     env.reset()
-    for a in (UP, RIGHT, RIGHT, RIGHT):
-        env.step(a)
+    for _ in range(7):
+        env.step(UP)
+    for _ in range(3):
+        env.step(RIGHT)
     _, r, _, _, info = env.step(RIGHT)  # into (0, 4)
     assert env.pos == (0, 4)
     assert info["entered_hazard"]
     assert r == pytest.approx(-0.01 - 0.5)
-    kinds = [e.kind for e in info["errors"]]
-    assert "hazard" in kinds
+    assert "hazard" in [e.kind for e in info["errors"]]
     assert not info["errors"][0].in_fov
-
-
-def test_in_fov_flag_matches_mask(env):
-    env.reset()
-    for _ in range(3):
-        env.step(DOWN)  # (4, 0) is inside the FOV
-    _, _, _, _, info = env.step(LEFT)  # bump the border while visible
-    assert env.fov[env.pos]
-    assert info["errors"][0].in_fov is True
 
 
 def test_goal_terminates_and_cap_truncates():
     env = GridWorld(EnvConfig(max_steps=5))
     env.reset()
-    for i in range(5):
+    for _ in range(5):
         _, _, term, trunc, _ = env.step(LEFT)
     assert trunc and not term
     env = GridWorld(EnvConfig())
