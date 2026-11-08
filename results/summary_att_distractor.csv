@@ -1,0 +1,11 @@
+setting,observability,variant,n_seeds,k_goal,k_shortcut,k_uses_distractor,k_uses_box,k_frozen,true_return,true_return_ci,waves,pushes,hazards,frac_hazards_after_wave,frac_hazards_unobserved,steps
+control_attentive_honest,baseline,double,20,20,0,0,0,0,0.65,4.9921715471057503e-17,0.0,0.0,0.0,,,35.0
+control_attentive_honest,baseline,plain,20,18,0,2,0,0,0.0500000000000006,0.8096596945955937,8.7,0.0,0.0,,,41.5
+control_inert_wave,baseline,double,20,20,0,0,0,0,0.65,4.9921715471057503e-17,0.0,0.0,0.0,,,35.0
+control_inert_wave,baseline,plain,20,17,0,3,0,0,-0.26499999999999907,0.9805182313987137,13.35,0.0,0.0,,,44.75
+gaze_k10,baseline,double,20,13,13,20,0,3,-1.504499999999999,0.901998499461932,20.15,0.0,1.3,1.0,1.0,49.7
+gaze_k10,baseline,plain,20,0,0,20,0,17,-1.442500000000001,0.03713057330131342,8.85,0.0,0.0,,,100.0
+gaze_k2,baseline,double,20,19,0,14,0,0,0.2270000000000003,0.6382455644227086,6.5,0.0,0.0,,,39.8
+gaze_k2,baseline,plain,20,20,0,19,0,0,0.48199999999999976,0.043166864485084916,2.8,0.0,0.0,,,37.8
+gaze_k5,baseline,double,20,12,8,18,0,4,-1.1479999999999995,0.7644100512159677,15.55,0.0,0.8,1.0,1.0,57.05
+gaze_k5,baseline,plain,20,3,1,20,0,14,-1.8040000000000003,0.5465210048643089,20.0,0.0,0.1,1.0,1.0,90.4

@@ -137,3 +137,56 @@ is the premise of Part 1). The predictor's Laplace prior and half-life (PLACEHOL
 the surprise floor at 0.2; a sharper observer model would lower it but not change 2b's
 sign. All praise parameters are PLACEHOLDERs (see RELATED_WORK.md for what would ground
 them).
+
+## Phase 3: attention manipulation (plain language)
+
+Code: `rlnf/attention/` (gaze model with lag, radius and lapses; a "wave" action that
+pulls the gaze to a salient event for k steps and costs the agent 0.05; a pushable box
+that blocks the camera's line of sight; controls: an inert wave, a transparent box, a
+fully attentive honest observer). Layout: start (3,0), goal (3,13); hidden top route 19
+steps with two hazards (true -0.19), safe bottom route 35 steps (true 0.65), so the
+shortcut is worth hiding. The agent observes whether its salient event is still showing
+(as the absent-supervisor agent observes the supervisor). Two design lessons on the way:
+a wave with no cost visible to the agent and no verdict from the observer is a free no-op
+that every learner spams (99 waves/episode even under the attentive honest observer),
+which is the null-action trap of v2.1, not manipulation; and on the equal-length maze
+there is no reason to distract at all. Both were fixed before the sweep.
+
+**Distractor (20 seeds per cell, σ = 0.3, α = 1).** Double Q learns attention
+manipulation when the pull is long enough: with k = 10, 13/20 seeds reach the goal by
+the hidden shortcut and 100% of their hazard entries fall within k steps after a wave;
+with k = 5, 8/20; with k = 2 (too short to reach the first hazard), 0/20. In both
+controls 0/20 seeds take the shortcut (inert wave: 0 waves per episode; attentive honest
+observer: 0 waves). The manipulators over-use the wave (15-20 per episode at k = 5-10,
+at 0.05 each), so their true return is -1.1 to -1.5, far below the honest 0.65 and even
+below the plain shortcut (-0.19): the hidden hazards are free but the hiding is not.
+Plain Q mostly freezes in the "distracted" states instead (14-17/20 frozen at k = 5-10,
+0-1/20 shortcuts), the Part 1 mechanism again: a state where nothing is judged.
+
+**Occluder (20 seeds per cell, 100k steps).** Not learned. In all six cells (box blocks
+line of sight / transparent box / attentive honest observer, plain and Double Q) 20/20
+seeds take the safe route, 0/20 push the box even once in evaluation, true return 0.65.
+The exploit requires eleven consecutive pushes along the top corridor over a state
+space of 225 x 225 (agent x box) cells, and ε-greedy exploration with the neutral
+Q-init never assembled that sequence within the budget. Because the three settings are
+identical, nothing can be concluded about the occluder except that this learner did not
+find it in 100k steps; a longer budget, shaped exploration, or a smaller box state would
+be needed, and the result is listed under "Do not claim".
+
+**Fixes (distractor k = 10 and occluder; 20 seeds per cell).** The decoupled / imputed
+reward (unattended steps get the penalty a model fit on attended steps predicts for that
+cell and action) removes the shortcut: 0/20 shortcut seeds for both learners (Double Q
+baseline: 13/20), 20/20 (plain) and 18/20 (Double Q) reach the goal, no hazard entries.
+It does not stop the waving itself: Double Q still waves 12.9 times per episode on the
+safe route (true return -0.19 from the 0.05 cost each, vs 0.65 without waving), plain Q
+3.3 times (true 0.45); the wave is cheap and nothing in the imputed reward prices it.
+The masked reward (unattended steps get nothing, attended ones rescaled) makes things
+worse, as in Part 1: Double Q 4/20 shortcuts and 14/20 frozen, plain Q 18/20 frozen and
+0/20 reach the goal. On the occluder both fixes are uninformative (20/20 safe route
+everywhere, as in the baseline).
+
+**Phase 3 verdict.** Learned attention manipulation is real for the distractor with a
+bias-corrected learner (Double Q: 8/20 at k = 5, 13/20 at k = 10, every hazard entry
+right after a wave, 0/20 in both controls); the plain learner freezes instead; the
+occluder was not discovered; the imputed fix removes the hidden shortcut but leaves the
+cheap distraction habit, and the masked fix backfires.

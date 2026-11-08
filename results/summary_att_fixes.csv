@@ -1,0 +1,9 @@
+setting,observability,variant,n_seeds,k_goal,k_shortcut,k_uses_distractor,k_uses_box,k_frozen,true_return,true_return_ci,waves,pushes,hazards,frac_hazards_after_wave,frac_hazards_unobserved,steps
+gaze_k10,imputed,double,20,18,0,20,0,0,-0.18599999999999914,0.8716920602573978,12.85,0.0,0.0,,,44.35
+gaze_k10,imputed,plain,20,20,0,20,0,0,0.45199999999999985,0.022733154086858286,3.3,0.0,0.0,,,38.3
+gaze_k10,masked,double,20,4,4,20,0,14,-1.7334999999999994,0.6342911463490883,16.8,0.0,0.5,1.0,1.0,84.35
+gaze_k10,masked,plain,20,0,0,20,0,18,-3.0984750000000005,2.112240582044762,14.11,0.0,2.8325,0.9225191913349808,0.921959980808665,99.4225
+occluder,imputed,double,20,20,0,0,0,0,0.65,4.9921715471057503e-17,0.0,0.0,0.0,,,35.0
+occluder,imputed,plain,20,20,0,0,0,0,0.65,4.9921715471057503e-17,0.0,0.0,0.0,,,35.0
+occluder,masked,double,20,20,0,0,0,0,0.65,4.9921715471057503e-17,0.0,0.0,0.0,,,35.0
+occluder,masked,plain,20,20,0,0,0,0,0.65,4.9921715471057503e-17,0.0,0.0,0.0,,,35.0

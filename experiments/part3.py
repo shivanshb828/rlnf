@@ -68,7 +68,10 @@ def main() -> None:
             g = d[d.variant == v].set_index("setting").reindex(settings)
             y = g[metric] if metric != "k_uses_distractor" else g.k_uses_distractor.where(g.index.str.startswith("gaze") | g.index.str.startswith("control"), g.k_uses_box)
             ax.bar(np.arange(len(settings)) + off, y, 0.36, color=col, label=f"{v} Q", edgecolor=SURFACE)
-        ax.set_xticks(range(len(settings))); ax.set_xticklabels([x.replace("_", "\n") for x in settings], fontsize=7)
+        short = {"gaze_k2": "wave\nk=2", "gaze_k5": "wave\nk=5", "gaze_k10": "wave\nk=10", "control_inert_wave": "control:\ninert wave",
+                 "control_attentive_honest": "control:\nattentive", "occluder": "box", "occluder_transparent": "box:\ntransparent",
+                 "occluder_attentive_honest": "box:\nattentive"}
+        ax.set_xticks(range(len(settings))); ax.set_xticklabels([short.get(x, x) for x in settings], fontsize=7)
         ax.set_title(label, loc="left", fontsize=9)
     axes[0, 0].legend(fontsize=8)
     fig.suptitle("Attention manipulation: gaze observer with a distractor action or a pushable occluder (α = 1, σ = 0.3, 20 seeds)", x=0.01, ha="left", fontsize=10)

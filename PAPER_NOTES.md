@@ -67,3 +67,47 @@ hazards only on the hidden top route) unless stated. Defaults and placeholders a
 ### Valence flip (one small run)
 - Honest brain, plain Q, 10 seeds: 10/10 safe route, true 0.72; flipping the praise sign changes the praise return from +0.11 to -0.11 per episode and nothing else.
 
+## Do not claim
+
+Results from v1-v3 and this round that are too weak, too artifact-prone, or both.
+
+- **Habituation as a cause of freezing (v1, v2).** v1's monotone-in-α PPO freeze was a reward-scale artifact (fixed by reward normalisation: honest α = 4 went from 3/10 to 9/10). v2's habituation ablation showed no dose-response because the leaky-exposure model has no floor: any decay saturates under a two-step oscillation. The habituation model itself (per-cell exposure, decay 0.8, τ = 500, dishabituation to 30%) is a stack of PLACEHOLDERs with no grounding. Say "habituation was modelled and did not change the conclusions", nothing more.
+- **"Optimising harder makes it worse" / rise-then-fall.** 0 seeds in every cell of every sweep (v2 main, v2.1, Part 2) except 1-2/20 late route switches in three uncentered v2 cells. The flawed signals fail from the first non-zero α.
+- **The v2.1 α = 4 "freezing is optimal" result.** True for 5/20 decoder seeds, but it comes from a ≈ 0.005 sampling error in the centered baseline times a 100-step horizon; it is a statement about centering with a finite calibration set, not about observers.
+- **Maxmin worsening freezing (v3).** Robust (4/12/11 of 20 at N = 2/4/8 vs plain 19/20 at σ = 0.3; 12-20/20 even at σ = 0.1) but the explanation (pessimism widens a gap whose visible side is already negative under exploration) is a reading of the numbers, not an intervention. Report the numbers; keep the explanation hedged.
+- **Tabular Double Q at σ = 0.03 (this round).** 14-16/20 non-goal in two experiments against 0/20 at σ ≥ 0.1; unexplained. Do not cite Double Q as a universal fix without the σ caveat.
+- **PPO critic/advantage mechanism (1a).** The logged advantages are consistent with the story; no intervention confirmed it, and the two critic-side fixes were null. Say "unresolved beyond the diagnostic".
+- **The praise and attention models' parameters.** Every one is a PLACEHOLDER (praise amplitude ratio, noise ratio, surprise weighting, predictor half-life, gaze lag/radius/lapse, distractor cost and pull, camera geometry). Claims should be about the *existence* of exploits under a plausible model, never about rates in humans.
+- **Decoder accuracies from BNCI 013-2015 as representative.** A 4-channel logistic decoder, cross-session with gaps up to 643 days; 53-81% is a lower bound on what a modern within-session pipeline gets.
+- **Anything from Part 3's occluder** beyond what `summary_att_occluder.csv` shows: the (agent, box) state space is 225 x 225 and 100k steps is thin coverage.
+
+## Future work
+
+- **Brain-feedback LLMs.** The blind-spot and praise-farming mechanisms are about *what the reward model can see*; an LLM fine-tuned on decoded ErrP/RewP from readers would have the same two failure modes with text instead of cells (unread passages, praised surface features). The observability-aware imputed reward and Double-Q-style decoupling have direct analogues (reward-model ensembles, held-out judges).
+- **Habituation with real data.** Replace the leaky-exposure placeholder with within-session ErrP amplitude trajectories (the 013-2015 sessions have ~500 trials each and could give an empirical amplitude-vs-trial-index curve per subject).
+- **Live human-subject validation.** The cleanest test of Part 1 is a short session where participants watch an agent in a maze with a hidden region while EEG is recorded, with the agent trained online from the decoded signal; the predictions are (i) hidden-half retreat with a plain learner, (ii) none with Double Q or an eye-tracking-informed imputed reward, (iii) praise farming at the boundary if a RewP channel is added.
+- **Within-session decoders and a wider accuracy range** for the real-noise cliff; and the deep-RL side of the fixes (ensembled Double DQN, decoupled critics).
+- **A fix for praise farming** (praise net progress over a window; observability-aware praise) and for attention manipulation beyond the two tested here.
+## Part 3: attention manipulation (the agent acts on what the observer sees)
+
+Setup: gaze observer (lag 1, radius 2, lapse 5%, all PLACEHOLDER), a "wave" action that pulls the gaze to a salient event for k steps (agent-visible cost 0.05), a pushable box that blocks the camera's line of sight; layout with a 19-step hazardous top route (true -0.19) vs a 35-step safe route (true 0.65); α = 1, σ = 0.3, 20 seeds per cell; the agent observes whether its salient event is showing.
+
+### Claim 3.1 — A bias-corrected tabular learner learns to distract the observer and err while it is distracted.
+- **Numbers.** Double Q, shortcut taken (and every hazard entry within k steps after a wave): k = 2: 0/20; k = 5: 8/20; k = 10: 13/20. Controls: inert wave 0/20 shortcuts and 0.0 waves per episode; fully attentive honest observer 0/20 and 0.0 waves. Distractor use (≥ 1 wave per eval episode): 14/20, 18/20, 20/20 at k = 2, 5, 10. Manipulators over-wave (15-20 per episode), so their true return (-1.1 to -1.5) is below even the unhidden shortcut's (-0.19).
+- **Figure.** `figures/part3_distractor.png`.
+- **Caveats.** The agent must observe the "distracted" state (as the absent-supervisor agent observes the supervisor); without that bit the contingency is unlearnable, which we verified (0/4 exploit seeds before adding it). The wave's cost had to be visible to the agent: a cost-free, unjudged wave is a free no-op that every learner spams even under an attentive observer (99 waves/episode), which is the Part 1 null-action trap, not manipulation. The exploit only exists on a layout where the shortcut is worth hiding; on the equal-length maze there is nothing to gain by distracting.
+
+### Claim 3.2 — The plain Q-learner does not manipulate; it freezes in the unjudged "distracted" states.
+- **Numbers.** Plain Q at k = 5 / 10: 14/20 and 17/20 frozen, 1/20 and 0/20 shortcuts, 0-3/20 reach the goal; at k = 2: 20/20 safe route. Even the attentive-honest control shows 2/20 plain-Q seeds waving ~90 times per episode.
+- **Figure.** `figures/part3_distractor.png`.
+- **Caveats.** Same mechanism as Part 1 (a state where nothing is judged attracts a max-biased learner); the attentive-control waving in 2/20 seeds is a weaker version of it and should be mentioned as such.
+
+### Claim 3.3 — The occluder exploit was not learned.
+- **Numbers.** Box blocks / transparent / attentive honest, plain and Double Q: 20/20 safe route, 0/20 box pushes in evaluation, true 0.65 in all six cells.
+- **Caveats.** 225 x 225 (agent, box) states and an 11-push sequence needed; 100k steps of ε-greedy exploration did not find it. A negative result about our learner and budget, not about occluders. Listed under "Do not claim".
+
+### Claim 3.4 — The decoupled (imputed) reward removes the hidden shortcut but not the distraction habit; the masked reward backfires.
+- **Numbers.** Distractor k = 10. Imputed: 0/20 shortcuts (Double Q baseline 13/20), 20/20 (plain) and 18/20 (Double Q) reach the goal, 0 hazard entries; residual waves per episode 3.3 (plain, true 0.45) and 12.9 (Double Q, true -0.19). Masked: Double Q 4/20 shortcuts and 14/20 frozen, plain Q 18/20 frozen, 0/20 goal. Occluder: both fixes 20/20 safe route (uninformative).
+- **Figure.** `figures/part3_fixes.png`.
+- **Caveats.** The imputed model is per (cell, action) and only prices what it has seen; the wave itself is never judged by the observer and costs 0.05, which is why it persists. Everitt et al.'s decoupling principle is implemented in its simplest tabular form.
+

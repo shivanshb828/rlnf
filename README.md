@@ -812,3 +812,18 @@ brain on all errors. Routes: 3 steps through the punishment tile (true return
   (v2, 10/10) was not re-tested with a bias-corrected critic. ASRN was
   implemented from the paper's prose with the documented choices; a different
   binning could behave differently. The decoder band (65-91%) is approximate.
+
+## Three-part paper round (Parts 1-3)
+
+The repo now also contains the material for "How reinforcement learning from neural
+feedback fails: blind spots, praise hacking, and attention manipulation":
+
+- `PHASE_LOG.md`: plain-language log of each phase (what was run, what came out, what broke).
+- `PAPER_NOTES.md`: every claim with exact numbers, seed counts, figure, caveats and fix; a
+  "Do not claim" list; future work.
+- `RELATED_WORK.md`: the prior work and how each paper relates to the results.
+- `figures/`: final figures, one per claim (`part1_*`, `part2_*`, `part3_*`).
+- New code: `rlnf/deep.py` (PyTorch PPO with critic diagnostics, DQN / Double DQN),
+  `rlnf/realerrp.py` (real ErrP decoder outputs from BNCI 013-2015; data not included),
+  `rlnf/praise/` (Part 2), `rlnf/attention/` (Part 3); sweeps in `experiments/sweep.py`,
+  analyses in `experiments/part{1,2,3}.py`.
