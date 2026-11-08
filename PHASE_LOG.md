@@ -190,3 +190,19 @@ bias-corrected learner (Double Q: 8/20 at k = 5, 13/20 at k = 10, every hazard e
 right after a wave, 0/20 in both controls); the plain learner freezes instead; the
 occluder was not discovered; the imputed fix removes the hidden shortcut but leaves the
 cheap distraction habit, and the masked fix backfires.
+
+## Phase 4: write-up prep
+
+- `figures/`: part1_freeze_vs_accuracy_gaussian.png, part1_real_noise_cliff.png,
+  part1_fixes_comparison.png, part1_observability_fix.png, part1_learners.png,
+  part1_ppo_critic.png; part2_praise_vs_freeze.png, part2_surprise_pressure.png;
+  part3_distractor.png, part3_fixes.png.
+- `PAPER_NOTES.md`: Parts 1-3 claim by claim (numbers, seed counts, figure, caveats, fix),
+  the Maxmin result with its best explanation, a "Do not claim" list (habituation,
+  rise-then-fall, the α = 4 optimal-freeze, the σ = 0.03 Double Q anomaly, the PPO
+  mechanism beyond the diagnostic, the occluder, all placeholder rates), and future work
+  (brain-feedback LLMs, habituation with real data, live human-subject validation).
+- `RELATED_WORK.md`: additions for RewP / observer FRN, Everitt et al. reward tampering,
+  REALab, tomato watering, Lang 2024, Leike 2017, Vivanti 2019, Lan 2020, van Hasselt
+  2010, Iturrate 2010, Kim 2017, Chavarriaga & Millán 2010.
+- `README.md`: pointer section for the three-part round.
