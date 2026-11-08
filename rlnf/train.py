@@ -44,9 +44,9 @@ class NeuralRewardWrapper(gym.Wrapper):
         self.stats = dict(
             steps=0, reached_goal=False, true_return=0.0, neural_return=0.0, agent_return=0.0,
             n_errors=0, errors_in_fov=0, errors_out_fov=0, repeated_errors=0, first_time_errors=0,
-            n_hazard=0, n_wall=0, n_away=0, errors_perceived=0, hab_factor_sum=0.0, stuck_steps=0,
+            n_hazard=0, n_wall=0, n_away=0, errors_perceived=0, hab_factor_sum=0.0,
         )
-        self._error_keys: set = set()   # (cell before the step, action) of error steps this episode
+        self._error_keys: dict = {}   # (cell before the step, action) -> count of error steps this episode
 
     def reset(self, **kwargs):
         self._new_episode()
@@ -74,17 +74,20 @@ class NeuralRewardWrapper(gym.Wrapper):
             if rec.perceived:
                 s["errors_perceived"] += 1
                 s["hab_factor_sum"] += rec.factor
-        if records:  # stuckness: an error step that repeats an earlier (cell, action) error this episode
+        if records:  # for stuckness: how often each (cell, action) error recurs this episode
             key = (pos_before, int(action))
-            if key in self._error_keys:
-                s["stuck_steps"] += 1
-            self._error_keys.add(key)
+            self._error_keys[key] = self._error_keys.get(key, 0) + 1
         info["amplitude"], info["p_error"] = amplitude, p_error
         if terminated or truncated:
             out = dict(s)
             n = out.pop("errors_perceived")
             out["mean_hab_factor"] = out.pop("hab_factor_sum") / n if n else np.nan
-            out["stuckness"] = out.pop("stuck_steps") / out["steps"]
+            # stuckness: share of steps spent repeating ONE (cell, action) error (the most repeated one).
+            # repeat_frac: share of steps repeating ANY earlier (cell, action) error (a random walk
+            # in a maze scores ~0.5 here, so it does not separate wandering from freezing).
+            counts = list(self._error_keys.values())
+            out["stuckness"] = (max(counts) - 1) / out["steps"] if counts else 0.0
+            out["repeat_frac"] = sum(c - 1 for c in counts) / out["steps"]
             info["episode_stats"] = out
         return obs, reward, terminated, truncated, info
 
@@ -114,7 +117,7 @@ def rollout(env: NeuralRewardWrapper, policy, n_episodes: int) -> list[dict]:
     return rows
 
 
-CHECKPOINT_FIELDS = ["true_return", "neural_return", "reached_goal", "stuckness", "n_errors",
+CHECKPOINT_FIELDS = ["true_return", "neural_return", "reached_goal", "stuckness", "repeat_frac", "n_errors",
                      "errors_out_fov", "n_hazard", "steps"]
 
 

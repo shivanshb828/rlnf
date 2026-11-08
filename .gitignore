@@ -3,5 +3,8 @@ __pycache__/
 *.pyc
 .pytest_cache/
 *.egg-info/
-results/*.csv
-results/*.png
+# Large per-episode / per-checkpoint data stay local; run-level and summary CSVs plus figures are committed.
+results/**/sweep.csv
+results/*_curves.csv
+results/*_checkpoints.csv
+results/smoke_*

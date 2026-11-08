@@ -1,4 +1,4 @@
-"""Sanity tests on learning behaviour. Q-learning runs in ~1 s; PPO is marked slow."""
+"""Sanity tests on learning behaviour. Q-learning runs in ~1 s each; PPO is marked slow."""
 import numpy as np
 import pytest
 
@@ -11,36 +11,82 @@ def eval_stats(df):
     return ev.true_return.mean(), ev.reached_goal.mean()
 
 
-def test_alpha_zero_q_learning_reaches_goal():
-    df = run(alpha=0.0, condition="honest", seed=0, learner="q", train_cfg=TrainConfig(total_steps=30_000))
-    true_ret, goal_rate = eval_stats(df)
-    assert goal_rate >= 0.95
-    # With no neural signal and gamma < 1 the agent should take the short hazard route.
-    assert true_ret == pytest.approx(0.40, abs=0.05)
+def test_alpha_zero_is_unsolved_by_design_but_solvable():
+    """v2 premise: with neutral Q-init the sparse task is not learned at alpha=0 ...
+    ... but with optimistic init (step cost as exploration bonus) it is, so the maze itself is fine."""
+    _, goal_neutral = eval_stats(run(0.0, "honest", 0, "q", TrainConfig(total_steps=100_000)))
+    _, goal_optimistic = eval_stats(run(0.0, "honest", 0, "q", TrainConfig(total_steps=100_000, q_init=0.0)))
+    assert goal_neutral < 0.5
+    assert goal_optimistic >= 0.95
 
 
-@pytest.mark.slow
-def test_alpha_zero_ppo_reaches_goal():
-    df = run(alpha=0.0, condition="honest", seed=0, learner="ppo", train_cfg=TrainConfig(total_steps=40_000))
-    _, goal_rate = eval_stats(df)
-    assert goal_rate >= 0.95
+def test_honest_feedback_makes_the_task_learnable():
+    """Moderate honest neural feedback is enough to find the safe route."""
+    for seed in range(3):
+        true_ret, goal = eval_stats(run(0.5, "honest", seed, "q", TrainConfig(total_steps=50_000)))
+        assert goal >= 0.95
+        assert true_ret == pytest.approx(0.72, abs=0.05)
 
 
 def test_honest_brain_high_alpha_does_not_degrade():
-    """Honest neural feedback at alpha=4 should be about as good as at alpha=0.5."""
     moderate = np.mean([eval_stats(run(0.5, "honest", s, "q", TrainConfig(total_steps=50_000)))[0] for s in range(3)])
     high = np.mean([eval_stats(run(4.0, "honest", s, "q", TrainConfig(total_steps=50_000)))[0] for s in range(3)])
-    assert moderate > 0.7                     # honest feedback steers to the safe route
+    assert moderate > 0.65
     assert high >= moderate - 0.1
 
 
+@pytest.mark.slow
+def test_ppo_honest_reaches_goal():
+    _, goal = eval_stats(run(1.0, "honest", 0, "ppo", TrainConfig(total_steps=60_000)))
+    assert goal >= 0.95
+
+
+def test_centered_reward_makes_clean_steps_free():
+    """Centered: neural return of a clean safe-route episode is ~0; uncentered: ~ -28 * p_clean."""
+    c = run(1.0, "honest", 0, "q", TrainConfig(total_steps=50_000, centered=True))
+    u = run(1.0, "honest", 0, "q", TrainConfig(total_steps=50_000, centered=False))
+    ce, ue = c[c.phase == "eval"], u[u.phase == "eval"]
+    assert ce.n_errors.mean() == 0 and ue.n_errors.mean() == 0
+    assert abs(ce.neural_return.mean()) < 0.5
+    assert ue.neural_return.mean() < -1.5
+
+
 def test_episode_log_columns_and_bookkeeping():
-    df = run(alpha=1.0, condition="both", seed=0, learner="q", train_cfg=TrainConfig(total_steps=5_000, eval_episodes=3))
-    needed = {"neural_return", "true_return", "n_errors", "errors_in_fov", "errors_out_fov",
-              "repeated_errors", "first_time_errors", "reached_goal", "steps", "phase", "step"}
+    df = run(1.0, "both", 0, "q", TrainConfig(total_steps=10_000, eval_episodes=3, checkpoint_every=5_000))
+    needed = {"neural_return", "true_return", "n_errors", "errors_in_fov", "errors_out_fov", "repeated_errors",
+              "first_time_errors", "reached_goal", "steps", "phase", "step", "stuckness", "kl", "centered"}
     assert needed <= set(df.columns)
-    assert (df.errors_in_fov + df.errors_out_fov == df.n_errors).all()
-    assert (df.repeated_errors + df.first_time_errors == df.n_errors).all()
-    assert (df.n_hazard + df.n_wall + df.n_away == df.n_errors).all()
-    assert (df[df.phase == "eval"].shape[0]) == 3
-    assert df.step.is_monotonic_increasing
+    tr = df[df.phase == "train"]
+    assert (tr.errors_in_fov + tr.errors_out_fov == tr.n_errors).all()
+    assert (tr.repeated_errors + tr.first_time_errors == tr.n_errors).all()
+    assert (tr.n_hazard + tr.n_wall + tr.n_away == tr.n_errors).all()
+    assert tr.stuckness.between(0, 1).all() and (tr.repeat_frac >= tr.stuckness).all()
+    assert (df.phase == "eval").sum() == 3
+    ck = df[df.phase == "checkpoint"]
+    assert list(ck.step) == [5_000, 10_000]
+    assert ck.kl.iloc[0] == 0.0 and ck.kl.iloc[1] >= 0   # reference policy is taken at the first checkpoint past 10%
+
+
+def test_stuckness_detects_a_frozen_agent():
+    """A policy that bumps the same wall forever has stuckness ~1; the safe route has 0."""
+    from rlnf.config import BrainConfig, EnvConfig
+    from rlnf.train import build_env, rollout
+    env = build_env(EnvConfig(), BrainConfig(), TrainConfig(alpha=1.0), seed=0)
+    frozen = rollout(env, lambda obs: 3, 1)[0]            # LEFT into the border from the start, forever
+    assert frozen["stuckness"] == pytest.approx(0.99) and frozen["repeat_frac"] == pytest.approx(0.99)
+    assert frozen["n_errors"] == 100 and not frozen["reached_goal"]
+    # A two-cell oscillation that errs on every other step: one key repeated ~50 times.
+    flip = {"n": 0}
+    def oscillate(obs):
+        flip["n"] += 1
+        return 0 if flip["n"] % 2 else 2        # UP (away error, hidden) then DOWN (no error)
+    osc = rollout(env, oscillate, 1)[0]
+    assert osc["stuckness"] == pytest.approx(0.49) and osc["n_errors"] == 50
+    g = env.unwrapped
+    from rlnf.env import ACTIONS
+    def optimal(obs):
+        r, c = g.pos
+        return min(ACTIONS, key=lambda a: g.cost_to_go[r + ACTIONS[a][0], c + ACTIONS[a][1]]
+                   if g.in_bounds((r + ACTIONS[a][0], c + ACTIONS[a][1])) else np.inf)
+    good = rollout(env, optimal, 1)[0]
+    assert good["stuckness"] == 0.0 and good["reached_goal"]
