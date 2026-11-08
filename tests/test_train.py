@@ -121,3 +121,34 @@ def test_region_values_and_hidden_share_are_logged():
     assert {"q_visible", "q_hidden", "hidden_share", "n_visible", "n_hidden"} <= set(tr.columns)
     assert (tr.n_visible + tr.n_hidden == tr.steps).all()
     assert tr.hidden_share.between(0, 1).all()
+
+
+@pytest.mark.parametrize("mode", ["masked", "imputed", "pessimistic"])
+def test_observability_modes_run_and_log(mode):
+    df = run(1.0, "visibility", 0, "q", TrainConfig(total_steps=5_000, eval_episodes=2, observability=mode))
+    tr = df[df.phase == "train"]
+    assert tr.observed_frac.between(0, 1).all()
+
+
+def test_observability_masked_gives_no_reward_for_unobserved_steps():
+    from rlnf.config import BrainConfig, EnvConfig
+    from rlnf.train import build_env
+    env = build_env(EnvConfig(), BrainConfig(visibility_flaw=True, noise_sigma=0.0), TrainConfig(alpha=1.0, observability="masked"), seed=0)
+    env.reset()
+    _, r, _, _, _ = env.step(0)                       # UP into the hidden half: unobserved, an 'away' error
+    assert r == pytest.approx(-0.01)                  # only the step cost
+    env.reset()
+    _, r_obs, _, _, _ = env.step(3)                   # LEFT: visible wall bump at the start -> penalised and rescaled
+    assert r_obs < -0.01
+
+
+def test_observability_imputed_uses_observed_estimates():
+    from rlnf.config import BrainConfig, EnvConfig
+    from rlnf.train import build_env
+    env = build_env(EnvConfig(), BrainConfig(visibility_flaw=True, noise_sigma=0.0), TrainConfig(alpha=1.0, observability="imputed"), seed=0)
+    env.reset()
+    for _ in range(5):
+        env.step(3)                                   # observed LEFT bumps at the start: P(error) ~ 1 learned for LEFT
+    env.step(0); env.step(0)                          # move into the hidden half
+    _, r_hidden_left, _, _, _ = env.step(3)           # unobserved LEFT bump: imputed from the per-action mean
+    assert r_hidden_left < -0.5

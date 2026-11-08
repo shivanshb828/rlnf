@@ -26,7 +26,8 @@ from rlnf.config import CONDITIONS, BrainConfig, EnvConfig, TrainConfig
 from rlnf.env import GridWorld
 from rlnf.absent_supervisor import ABSENT_SUPERVISOR_CFG, AbsentSupervisor
 
-ENVS = {"maze": (GridWorld, EnvConfig()), "absent_supervisor": (AbsentSupervisor, ABSENT_SUPERVISOR_CFG)}
+ENVS = {"maze": (GridWorld, EnvConfig()), "absent_supervisor": (AbsentSupervisor, ABSENT_SUPERVISOR_CFG),
+        "attention": (None, None)}   # the attention maze brings its own layout; built with an AttentionConfig in build_env
 
 
 class NeuralRewardWrapper(gym.Wrapper):
@@ -36,11 +37,18 @@ class NeuralRewardWrapper(gym.Wrapper):
     The brain persists across episodes (the observer watches the whole run).
     """
 
-    def __init__(self, env: GridWorld, brain: Brain, decoder: Decoder, alpha: float, centered: bool = True):
+    def __init__(self, env: GridWorld, brain: Brain, decoder: Decoder, alpha: float, centered: bool = True,
+                 observability: str = "baseline"):
         super().__init__(env)
         self.brain, self.decoder, self.alpha = brain, decoder, alpha
         self.baseline = decoder.p_clean if centered else 0.0
         self.goal_reward, self.step_penalty = env.cfg.goal_reward, env.cfg.step_penalty
+        self.observability = observability
+        # Running statistics on *observed* steps, for the observability-aware modes.
+        self._n_steps, self._n_observed = 0, 0
+        self._p_by_key: dict = {}                                   # (cell before, action) -> [sum P, n]
+        self._p_by_action = np.zeros((env.action_space.n, 2))       # action -> [sum P, n]
+        self._p_global = np.zeros(2)
         self._new_episode()
 
     def _new_episode(self) -> None:
@@ -50,6 +58,7 @@ class NeuralRewardWrapper(gym.Wrapper):
             n_hazard=0, n_wall=0, n_away=0, errors_perceived=0, hab_factor_sum=0.0,
             # per-region agent-reward sums (region = FOV status of the cell after the step)
             n_visible=0, r_sum_visible=0.0, r_sq_visible=0.0, n_hidden=0, r_sum_hidden=0.0, r_sq_hidden=0.0,
+            observed_steps=0,
         )
         self._error_keys: dict = {}   # (cell before the step, action) -> count of error steps this episode
 
@@ -57,16 +66,60 @@ class NeuralRewardWrapper(gym.Wrapper):
         self._new_episode()
         return self.env.reset(**kwargs)
 
+    def neural(self, info: dict, observed: bool, pos_before, action: int):
+        """One step of brain + decoder -> (neural reward, perceived-error records, per-step extras to log).
+
+        Subclasses (e.g. the praise brain) override this.
+        """
+        amplitude, records = self.brain.observe(info["errors"])
+        p_error = float(self.decoder.predict_proba(amplitude))
+        info["amplitude"], info["p_error"] = amplitude, p_error
+        return self._neural_reward(p_error, observed, pos_before, action), records, {}
+
+    def _neural_reward(self, p_error: float, observed: bool, pos_before, action: int) -> float:
+        """Centered neural reward, with the unobserved-step policy selected by ``observability``."""
+        self._n_steps += 1
+        if observed:
+            self._n_observed += 1
+            key = (pos_before, action)
+            self._p_by_key.setdefault(key, [0.0, 0])
+            self._p_by_key[key][0] += p_error; self._p_by_key[key][1] += 1
+            self._p_by_action[action] += (p_error, 1)
+            self._p_global += (p_error, 1)
+        mode = self.observability
+        if mode == "baseline" or (observed and mode != "masked"):
+            return -(p_error - self.baseline)
+        if mode == "masked":
+            return -(p_error - self.baseline) * self._n_steps / self._n_observed if observed else 0.0
+        fallback = self._p_global[0] / self._p_global[1] if self._p_global[1] else self.baseline
+        if mode == "imputed":
+            key = (pos_before, action)
+            if key in self._p_by_key:
+                p_hat = self._p_by_key[key][0] / self._p_by_key[key][1]
+            elif self._p_by_action[action, 1]:
+                p_hat = self._p_by_action[action, 0] / self._p_by_action[action, 1]
+            else:
+                p_hat = fallback
+        elif mode == "pessimistic":
+            p_hat = self._p_by_action[action, 0] / self._p_by_action[action, 1] if self._p_by_action[action, 1] else fallback
+        else:
+            raise ValueError(mode)
+        return -(p_hat - self.baseline)
+
     def step(self, action):
         pos_before = self.env.unwrapped.pos
         obs, true_reward, terminated, truncated, info = self.env.step(action)
-        amplitude, records = self.brain.observe(info["errors"])
-        p_error = float(self.decoder.predict_proba(amplitude))
-        neural_reward = -(p_error - self.baseline)
+        # "observed" = the observer registered this step: inside the FOV, or any step for a brain without the
+        # visibility flaw (the honest observer sees everything, so nothing must be masked or imputed for it).
+        observed = bool(info.get("observed", self.env.unwrapped.fov[self.env.unwrapped.pos])) or not self.brain.cfg.visibility_flaw
+        neural_reward, records, extras = self.neural(info, observed, pos_before, int(action))
         reward = self.goal_reward * info["reached_goal"] - self.step_penalty + self.alpha * neural_reward
 
         s = self.stats
         s["steps"] += 1
+        s["observed_steps"] += observed
+        for k, v in extras.items():
+            s[k] = s.get(k, 0.0) + v
         s["reached_goal"] = bool(info["reached_goal"])
         s["true_return"] += true_reward
         s["neural_return"] += neural_reward
@@ -86,9 +139,10 @@ class NeuralRewardWrapper(gym.Wrapper):
         if records:  # for stuckness: how often each (cell, action) error recurs this episode
             key = (pos_before, int(action))
             self._error_keys[key] = self._error_keys.get(key, 0) + 1
-        info["amplitude"], info["p_error"] = amplitude, p_error
         if terminated or truncated:
             out = dict(s)
+            for k in extras:                                   # per-step extras are logged as episode means
+                out[k] = out[k] / out["steps"]
             n = out.pop("errors_perceived")
             out["mean_hab_factor"] = out.pop("hab_factor_sum") / n if n else np.nan
             # stuckness: share of steps spent repeating ONE (cell, action) error (the most repeated one).
@@ -98,18 +152,41 @@ class NeuralRewardWrapper(gym.Wrapper):
             out["stuckness"] = (max(counts) - 1) / out["steps"] if counts else 0.0
             out["repeat_frac"] = sum(c - 1 for c in counts) / out["steps"]
             out["hidden_share"] = out["n_hidden"] / out["steps"]
+            out["observed_frac"] = out.pop("observed_steps") / out["steps"]
             info["episode_stats"] = out
         return obs, reward, terminated, truncated, info
 
 
 def build_env(env_cfg: EnvConfig, brain_cfg: BrainConfig, train_cfg: TrainConfig, seed: int,
-              env_cls=GridWorld) -> NeuralRewardWrapper:
+              env_cls=GridWorld, praise_cfg=None, attention_cfg=None) -> NeuralRewardWrapper:
     """Env + brain (with the condition's flaws) + decoder fit on an honest brain.
 
     Same seed -> same decoder and same noise draws in every brain condition.
     """
-    decoder = fit_decoder(env_cfg, brain_cfg, n_steps=train_cfg.decoder_samples, seed=seed)
-    return NeuralRewardWrapper(env_cls(env_cfg), Brain(brain_cfg, seed=seed), decoder, train_cfg.alpha, train_cfg.centered)
+    if attention_cfg is not None:
+        from rlnf.attention.env import ATTENTION_CFG, AttentionMaze
+        from rlnf.attention.reward import AttentionRewardWrapper
+        env_cfg = env_cfg or ATTENTION_CFG
+        decoder = fit_decoder(env_cfg, brain_cfg, n_steps=train_cfg.decoder_samples, seed=seed)
+        return AttentionRewardWrapper(AttentionMaze(env_cfg, attention_cfg), Brain(brain_cfg, seed=seed), decoder,
+                                      train_cfg.alpha, train_cfg.centered, train_cfg.observability)
+    if praise_cfg is not None:
+        from rlnf.praise.brain import PraiseBrain, fit_praise_decoder
+        from rlnf.praise.reward import PraiseRewardWrapper
+        env = env_cls(env_cfg)
+        brain = PraiseBrain(brain_cfg, praise_cfg, env.observation_space.shape[0], env.action_space.n, seed=seed)
+        decoder = fit_decoder(env_cfg, brain_cfg, n_steps=train_cfg.decoder_samples, seed=seed)
+        praise_decoder = fit_praise_decoder(env_cfg, brain_cfg, praise_cfg, n_steps=train_cfg.decoder_samples, seed=seed)
+        return PraiseRewardWrapper(env, brain, decoder, praise_decoder, praise_cfg, train_cfg.alpha, train_cfg.centered,
+                                   train_cfg.observability)
+    if train_cfg.real_errp:
+        from rlnf.realerrp import RealErrPBrain
+        brain = RealErrPBrain(brain_cfg, seed=seed)
+        decoder = brain.decoder()
+    else:
+        brain = Brain(brain_cfg, seed=seed)
+        decoder = fit_decoder(env_cfg, brain_cfg, n_steps=train_cfg.decoder_samples, seed=seed)
+    return NeuralRewardWrapper(env_cls(env_cfg), brain, decoder, train_cfg.alpha, train_cfg.centered, train_cfg.observability)
 
 
 # ---------------------------------------------------------------------------
@@ -355,16 +432,28 @@ def train_ppo(env: NeuralRewardWrapper, cfg: TrainConfig, seed: int) -> list[dic
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
+def _deep(name):
+    def go(env, cfg, seed):
+        from rlnf import deep   # imported lazily: torch is slow to import and only these learners need it
+        return {"ppo_torch": deep.train_ppo_torch,
+                "dqn": lambda e, c, s: deep.train_dqn(e, c, s, double=False),
+                "ddqn": lambda e, c, s: deep.train_dqn(e, c, s, double=True)}[name](env, cfg, seed)
+    return go
+
+
+LEARNERS = {"q": train_q, "ppo": train_ppo, "ppo_torch": _deep("ppo_torch"), "dqn": _deep("dqn"), "ddqn": _deep("ddqn")}
+
+
 def run(alpha: float, condition: str, seed: int, learner: str,
         train_cfg: TrainConfig = TrainConfig(), env_cfg: EnvConfig | None = None,
-        brain_cfg: BrainConfig = BrainConfig(), env_name: str = "maze") -> pd.DataFrame:
+        brain_cfg: BrainConfig = BrainConfig(), env_name: str = "maze", praise_cfg=None, attention_cfg=None) -> pd.DataFrame:
     """One training run -> tidy DataFrame (train episodes, checkpoints, eval episodes)."""
     train_cfg = replace(train_cfg, alpha=alpha, learner=learner)
     brain_cfg = replace(brain_cfg, **CONDITIONS[condition])
     env_cls, default_cfg = ENVS[env_name]
-    env = build_env(env_cfg or default_cfg, brain_cfg, train_cfg, seed, env_cls)
+    env = build_env(env_cfg or default_cfg, brain_cfg, train_cfg, seed, env_cls, praise_cfg, attention_cfg)
     t0 = time.time()
-    rows = {"q": train_q, "ppo": train_ppo}[learner](env, train_cfg, seed)
+    rows = LEARNERS[learner](env, train_cfg, seed)
     df = pd.DataFrame(rows)
     for i, (k, v) in enumerate(dict(learner=learner, condition=condition, alpha=alpha, seed=seed,
                                     centered=train_cfg.centered, habituation_decay=brain_cfg.habituation_decay,

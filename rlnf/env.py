@@ -121,6 +121,7 @@ class GridWorld(gym.Env):
         nxt = (self.pos[0] + dr, self.pos[1] + dc)
         errors: list[ErrorEvent] = []
         entered_hazard = False
+        progress = False
 
         if not self.in_bounds(nxt) or self.walls[nxt]:
             nxt = self.pos  # bump: stay put
@@ -131,6 +132,7 @@ class GridWorld(gym.Env):
                 errors.append(ErrorEvent("hazard", nxt, bool(self.fov[nxt])))
             if self.cost_to_go[nxt] > self.cost_to_go[self.pos]:
                 errors.append(ErrorEvent("away", nxt, bool(self.fov[nxt])))
+            progress = bool(self.cost_to_go[nxt] < self.cost_to_go[self.pos])
         self.pos = nxt
 
         reached_goal = self.pos == self.goal
@@ -146,6 +148,8 @@ class GridWorld(gym.Env):
             "reached_goal": reached_goal,
             "entered_hazard": entered_hazard,
             "errors": errors,
+            "progress": progress,          # a "good event": the step reduced the true cost-to-go
+            "in_fov": bool(self.fov[self.pos]),
             "pos": self.pos,
         }
         return self._obs(), true_reward, terminated, truncated, info

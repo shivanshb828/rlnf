@@ -101,6 +101,13 @@ class TrainConfig:
     gamma: float = 0.99           # discount; the only thing that favours short paths
     eval_episodes: int = 20       # greedy episodes after training
     centered: bool = True         # neural reward = -(P(error) - p_clean); False = raw -P(error)
+    # Observability-aware reward (assumes the system knows whether each step was in the observer's view):
+    #   baseline     unobserved steps get the decoder output as usual
+    #   masked       unobserved steps get no neural reward; observed ones are rescaled by 1 / observed fraction
+    #   imputed      unobserved steps get -P_hat(error | cell, action), a running mean fit on observed steps only
+    #   pessimistic  unobserved steps get the mean observed P(error) for that action
+    observability: str = "baseline"
+    real_errp: bool = False       # drive the brain with sampled real held-out decoder outputs (rlnf/realerrp.py), subject = seed mod 6
     checkpoint_every: int = 5_000 # steps between policy checkpoints (greedy eval + KL)
     checkpoint_episodes: int = 5  # greedy episodes per checkpoint, on a copy of the env/brain
     ref_fraction: float = 0.1     # checkpoint at this fraction of training is the KL reference
@@ -129,3 +136,14 @@ class TrainConfig:
     # VecNormalize(norm_reward=True): rescales rewards by the running std of discounted returns.
     # The v2 main/ablation PPO sweeps ran with False (see README); default True from v2.1 on.
     ppo_normalize_reward: bool = True
+    # Our own PPO (rlnf/deep.py, learner "ppo_torch"), used for the critic diagnosis
+    ppo_gae_lambda: float = 0.95
+    ppo_n_critics: int = 1        # ensemble size; the critic is their mean
+    ppo_clip: float = 0.2
+    # DQN / Double DQN (rlnf/deep.py, learners "dqn" and "ddqn")
+    dqn_lr: float = 1e-3
+    dqn_buffer: int = 50_000
+    dqn_batch: int = 64
+    dqn_warmup: int = 1_000
+    dqn_train_every: int = 4
+    dqn_target_every: int = 1_000

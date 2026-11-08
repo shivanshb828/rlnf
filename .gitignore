@@ -8,3 +8,4 @@ results/**/sweep.csv
 results/*_curves.csv
 results/*_checkpoints.csv
 results/smoke_*
+data/
